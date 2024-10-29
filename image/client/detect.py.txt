@@ -1,0 +1,50 @@
+from http.client import HTTPConnection
+import json
+from time import sleep
+from typing import List, Optional
+from urllib.parse import quote_plus
+
+from loguru import logger
+from PIL import Image
+
+import image.client
+from image.detection import Detection
+from image.utils import jpeg_encode
+
+
+def detect(img: Image.Image,
+           label: str,
+           annotate_best_only: bool = False,
+           annotate_labels: Optional[List[str]] = None,
+           hide_in_history: bool = False) -> List[Detection]:
+    while True:
+        try:
+            logger.info(f"Sending image labelled {label} for detection; "
+                        f"annotating best only: {annotate_best_only}; "
+                        f"annotating labels: {annotate_labels or '(all)'}; "
+                        f"hiding in history: {hide_in_history}")
+            image_jpeg = jpeg_encode(img)
+            conn = HTTPConnection(image.client.http_server)
+            conn.request(
+                "POST",
+                f"/{quote_plus(label)}",
+                image_jpeg,
+                {
+                    "X-annotate-best-only": json.dumps(annotate_best_only),
+                    "X-annotate-labels": ",".join(annotate_labels or []),
+                    "X-hide-in-history": json.dumps(hide_in_history),
+                },
+            )
+            logger.info("Waiting for image detection response")
+            response = conn.getresponse().read().decode()
+            detections = [Detection.from_dict(d) for d in json.loads(response)]
+            logger.info(f"Server returned detections: {detections}")
+            return detections
+        except ConnectionError as e:
+            logger.error(f"Connection error: {e}")
+            sleep(0.2)
+            continue
+
+
+logger.info("Sending warmup request")
+detect(Image.new("RGB", (640, 480)), "warmup", hide_in_history=True)

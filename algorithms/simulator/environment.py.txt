@@ -1,0 +1,62 @@
+from typing import List
+
+import pygame
+
+from algorithms import constants
+from algorithms.navigation.entities import Obstacle
+from algorithms.simulator.drawer import ObstacleDrawer
+
+
+class Environment:
+    def __init__(self, surface, obstacles: List[Obstacle]):
+        self.surface: pygame.Surface = surface
+        self.obstacles: List[Obstacle] = obstacles
+
+        self.startBox = pygame.Rect(
+            constants.START_X,
+            constants.GRID_HEIGHT - constants.START_HEIGHT,
+            constants.START_WIDTH,
+            constants.START_HEIGHT,
+        )
+        self.startTextBox = pygame.Rect(
+            constants.START_X + 6,
+            constants.GRID_HEIGHT - (2.8 * constants.PYGAME_SCALE),
+            constants.START_WIDTH,
+            constants.START_HEIGHT,
+        )
+        self.gridBox = pygame.Rect(0, 0, constants.GRID_WIDTH, constants.GRID_HEIGHT)
+
+        self.font = pygame.font.Font("freesansbold.ttf", 33)
+
+    def draw_window(self):
+        """
+        This methods draws the entire pygame window out.
+        """
+        self.surface.fill(constants.COLOR_BG)
+
+        pygame.draw.rect(self.surface, constants.COLOR_GRID_BG, self.gridBox)
+
+    def draw_start_box(self):
+        """
+        This method draws the start box onto the simulator
+        """
+        pygame.draw.rect(self.surface, constants.COLOR_START, self.startBox)
+        text = self.font.render("START", True, constants.BLACK, None)
+        self.surface.blit(text, self.startTextBox)
+
+    def draw_obstacles(self):
+        """
+        This method draws all the obstacles given onto the simulator.
+        """
+        for obstacle in self.obstacles:
+            obstacle_drawer = ObstacleDrawer(self.surface, obstacle)
+            obstacle_drawer.draw()
+
+    def draw_environ(self):
+        """
+        This function is to draw out the entire environment which the robot will be traversing in.
+        It will draw the pygame window, draw the start box on the grid and the obstacles.
+        """
+        self.draw_window()
+        self.draw_start_box()
+        self.draw_obstacles()

@@ -1,0 +1,343 @@
+from collections import defaultdict
+from itertools import permutations
+from typing import List, Dict, Set, Tuple, Optional
+
+from loguru import logger
+
+from algorithms.navigation.entities import (
+    Position,
+    Movement,
+    Coordinates,
+    Obstacle,
+    Direction,
+)
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.instruction import (
+    Instruction,
+    MovementInstruction,
+    RecogniseImageInstruction,
+    compress_instructions,
+)
+
+
+class Robot:
+    def __init__(self, grid: Grid, starting_position: Position):
+        self.grid: Grid = grid
+        self.starting_position = starting_position
+
+    def get_compressed_instructions(self) -> List[Instruction]:
+        """
+        Computes the compressed list of instructions that the robot should follow to visit and recognise images at
+        all obstacles. A list of instructions is compressed if consecutive straight movements are grouped together as
+        a single instance of MovementInstruction.
+
+        Returns:
+            A compressed list of instructions that the robot should follow to travel from its starting position to
+            each obstacle in order. It includes instructions to move, and instructions to recognise images.
+        """
+        optimal_instructions: List[Instruction] = self.get_optimal_instructions()
+        compressed_instructions: List[Instruction] = compress_instructions(optimal_instructions)
+        return compressed_instructions
+
+    def get_optimal_instructions(self) -> List[Instruction]:
+        """
+        Determines the complete instructions that the robot should follow to visit and recognise images at all
+        obstacles.
+
+        Returns:
+            A list of instructions that the robot should follow to travel from its starting position to
+            each obstacle in order. It includes instructions to move, and instructions to recognise images.
+        """
+        ordered_permutation_of_obstacles: List[
+            Tuple[float, List[Obstacle]]
+        ] = self._get_ordered_permutation_of_obstacles()
+        for cost, permutation_of_obstacles in ordered_permutation_of_obstacles[:5]:
+            instructions_and_cost = self._get_instructions_and_cost(permutation_of_obstacles)
+            if instructions_and_cost:
+                complete_instructions, _ = instructions_and_cost
+                return complete_instructions
+        logger.error("Unable to find any path from the starting position to visit all obstacles.")
+
+    def _get_ordered_permutation_of_obstacles(self) -> List[Tuple[float, List[Obstacle]]]:
+        """
+        Determines, by estimation with Manhattan distance, a list of different permutation of obstacles,
+        starting with the permutation that requires the least cost to travel from the starting position and visit
+        all obstacles.
+
+        Returns:
+            A sorted list containing different permutations of obstacles, beginning with the permutation with
+            the lowest estimated cost.
+        """
+        ordered_permutation_of_obstacles = []
+
+        all_permutations_of_obstacles: List[Tuple[Obstacle]] = list(permutations(self.grid.obstacles))
+        for permutation in all_permutations_of_obstacles:
+            waypoints: List[Position] = [self.starting_position]
+            target_positions: List[Position] = [obstacle.get_robot_target_position() for obstacle in permutation]
+            waypoints.extend(target_positions)
+
+            current_cost: float = 0
+            for i in range(len(waypoints) - 1):
+                current_cost += waypoints[i].manhattan_dist_from(waypoints[i + 1])
+
+            ordered_permutation_of_obstacles.append((current_cost, list(permutation)))
+
+        ordered_permutation_of_obstacles.sort(key=lambda x: x[0])
+
+        return ordered_permutation_of_obstacles
+
+    def _get_instructions_and_cost(
+        self, permutation_of_obstacles: List[Obstacle]
+    ) -> Optional[Tuple[List[Instruction], float]]:
+        """
+        Given a pre-defined sequence of obstacles that must be visited in order, this determines the complete
+        instructions that the robot should follow to visit and recognise images at all obstacles in order.
+
+        Args:
+            permutation_of_obstacles: The sequence of obstacles which the robot should visit in order.
+
+        Returns:
+            A list of instructions that the robot should follow to travel from its starting position to
+            each obstacle in order, and the total cost of doing so. It includes instructions to move,
+            and instructions to recognise images.
+        """
+        logger.info(
+            "Generating instructions to travel from starting position of "
+            f"{self.starting_position} to the obstacles {permutation_of_obstacles}."
+        )
+
+        waypoints: List[Position] = [self.starting_position]
+        target_positions: List[Position] = [
+            obstacle.get_robot_target_position() for obstacle in permutation_of_obstacles
+        ]
+        waypoints.extend(target_positions)
+
+        complete_instructions: List[Instruction] = []
+        total_cost: float = 0.0
+
+        for i in range(len(waypoints) - 1):
+            partial_instructions: List[Instruction] = self._a_star_search(waypoints[i], waypoints[i + 1])
+
+            if not partial_instructions:
+                logger.warning(
+                    f"Failed to generate instructions to travel from the starting position of "
+                    f"{self.starting_position} to the obstacles {permutation_of_obstacles}."
+                )
+                return None
+
+            complete_instructions.extend(partial_instructions)
+            complete_instructions.append(RecogniseImageInstruction(permutation_of_obstacles[i].position))
+
+            for instruction in partial_instructions:
+                total_cost += instruction.movement.cost()
+
+        logger.success(
+            "Generated instructions from the starting position of "
+            f"{self.starting_position} to the obstacles {permutation_of_obstacles}"
+            f"by following {complete_instructions}."
+        )
+        return complete_instructions, total_cost
+
+    def _a_star_search(self, start: Position, goal: Position) -> Optional[List[MovementInstruction]]:
+        """
+        Finds a path for the robot to move from one position to another.
+
+        Args:
+            start: The initial position of the robot.
+            goal: The target final position of the robot.
+
+        Returns:
+            A list of movement instructions that the robot should follow to travel from the start to the goal.
+        """
+        logger.info(f"Searching for the optimal path from {start} to {goal}.")
+        open_set: Set[Position] = {start}
+
+        came_from: Dict[Position, Position] = {}
+        last_movement_to: Dict[Position, Movement] = {}
+
+        g_score: Dict[Position, float] = defaultdict(lambda: float("inf"))
+        g_score[start] = 0
+
+        f_score: Dict[Position, float] = defaultdict(lambda: float("inf"))
+        f_score[start] = start.manhattan_dist_from(goal)
+
+        while open_set:
+            current: Position = min(open_set, key=lambda x: f_score[x])
+
+            if current == goal:
+                instructions: List[MovementInstruction] = self._reconstruct_path(goal, came_from, last_movement_to)
+                logger.success(f"Found the optimal path from {start} to {goal} by following {instructions}.")
+                return instructions
+
+            open_set.remove(current)
+
+            for movement, neighbour in self._get_possible_movements_and_positions(current):
+                tentative_g_score = g_score[current] + movement.cost()
+                if tentative_g_score < g_score[neighbour]:
+                    logger.trace(f"Found a better path to reach {neighbour} by moving {movement} from {current}.")
+                    came_from[neighbour] = current
+                    last_movement_to[neighbour] = movement
+                    g_score[neighbour] = tentative_g_score
+                    f_score[neighbour] = tentative_g_score + neighbour.manhattan_dist_from(goal)
+                    if neighbour not in open_set:
+                        open_set.add(neighbour)
+
+        logger.warning(f"Failed to find a path from {start} to {goal}.")
+        return None
+
+    def _reconstruct_path(
+        self, goal: Position, came_from: Dict[Position, Position], last_movement_to: Dict[Position, Movement]
+    ) -> List[MovementInstruction]:
+        """
+        Performs backtracking to generate movement instructions for the robot.
+
+        Args:
+            goal: The target final position of the robot.
+            came_from: Key-value pairs which records the previous position of the robot, given its current position.
+            last_movement_to: Key-value pairs which records the last movement of the robot, given its current position.
+
+        Returns:
+            A list of movement instructions for the robot.
+        """
+        instructions: List[MovementInstruction] = []
+        current_position: Position = goal
+
+        while current_position in came_from and current_position in last_movement_to:
+            last_movement: Movement = last_movement_to[current_position]
+            previous_position: Position = came_from[current_position]
+
+            movement_command = MovementInstruction(previous_position, last_movement, current_position)
+            instructions.append(movement_command)
+
+            current_position = previous_position
+
+        instructions.reverse()
+        return instructions
+
+    def _get_possible_movements_and_positions(self, current_position) -> List[Tuple[Movement, Position]]:
+        """
+        Finds all valid movements that the robot could take, and all the corresponding positions that the robot would
+        reach from making that movement.
+
+        Args:
+            current_position: The current position of the robot.
+
+        Returns:
+            A list of movement and position pairs. Each element of the list contains a movement that the robot
+            could take, and a position that the robot would reach from executing that movement.
+        """
+        possible_movements_and_positions: List[Tuple[Movement, Position]] = []
+        for movement in Movement:
+            if self._is_valid_robot_movement(current_position, movement):
+                next_position: Position = current_position.get_next_robot_position(movement)
+                possible_movements_and_positions.append((movement, next_position))
+
+        logger.trace(
+            f"From {current_position}, it is possible to make the following movements and reach the "
+            f"corresponding positions: {possible_movements_and_positions}."
+        )
+        return possible_movements_and_positions
+
+    def _is_valid_robot_movement(self, current_position: Position, movement: Movement) -> bool:
+        """
+        Determines if a movement is valid for the robot to take, given its current position.
+
+        Args:
+            current_position: The current position of the robot.
+            movement: The movement that the robot could execute.
+
+        Returns:
+            True if executing the movement results in the robot reaching a legal position, and False otherwise.
+        """
+        unsafe_coordinates_around_obstacles: Set[Coordinates] = self.grid.unsafe_coordinates_around_all_obstacles()
+
+        final_position: Position = current_position.get_next_robot_position(movement)
+        robot_final_occupied_coordinates: Set[Coordinates] = self._coordinates_occupied(final_position)
+        robot_intermediate_occupied_coordinates: Set[Coordinates] = self._get_intermediate_coordinates_occupied(
+            current_position, movement
+        )
+        robot_occupied_coordinates: Set[Coordinates] = robot_final_occupied_coordinates.union(
+            robot_intermediate_occupied_coordinates
+        )
+
+        for robot_x_coordinate, robot_y_coordinate in robot_occupied_coordinates:
+            if (
+                robot_x_coordinate < 0
+                or robot_x_coordinate >= self.grid.width
+                or robot_y_coordinate < 0
+                or robot_y_coordinate >= self.grid.height
+            ):
+                return False
+
+            collision_coordinates: Set[Coordinates] = unsafe_coordinates_around_obstacles.intersection(
+                robot_occupied_coordinates
+            )
+            if collision_coordinates:
+                return False
+
+        return True
+
+    def _coordinates_occupied(self, robot_position: Position) -> Set[Coordinates]:
+        """
+        Determines which coordinates are occupied by the robot based on the coordinates of its center.
+
+        Args:
+            robot_position: The centre of the robot.
+
+        Returns:
+            A list of coordinates occupied by the robot.
+        """
+        coordinates_occupied: Set[Coordinates] = {(robot_position.x_coordinate, robot_position.y_coordinate)}
+
+        offsets: List[Coordinates] = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        for x_offset, y_offset in offsets:
+            next_coord: Coordinates = (robot_position.x_coordinate + x_offset, robot_position.y_coordinate + y_offset)
+            coordinates_occupied.add(next_coord)
+
+        logger.trace(
+            f"With a centre position of {robot_position}, "
+            f"the robot occupies the coordinates {coordinates_occupied}."
+        )
+        return coordinates_occupied
+
+    def _get_intermediate_coordinates_occupied(self, robot_position: Position, movement: Movement) -> Set[Coordinates]:
+        if movement.is_straight():
+            return set()
+
+        northeast_coordinates_offsets = [(x, y) for y in range(0, 3) for x in range(0, 3)]
+        southeast_coordinates_offsets = [(x, y) for y in range(-2, 1) for x in range(0, 3)]
+        southwest_coordinates_offsets = [(x, y) for y in range(-2, 1) for x in range(-2, 1)]
+        northwest_coordinates_offsets = [(x, y) for y in range(0, 3) for x in range(-2, 1)]
+        coordinates_offsets: Dict[Direction, Dict[Movement, List[Tuple]]] = {
+            Direction.NORTH: {
+                Movement.FORWARD_LEFT: northwest_coordinates_offsets,
+                Movement.FORWARD_RIGHT: northeast_coordinates_offsets,
+                Movement.REVERSE_RIGHT: southeast_coordinates_offsets,
+                Movement.REVERSE_LEFT: southwest_coordinates_offsets,
+            },
+            Direction.SOUTH: {
+                Movement.FORWARD_LEFT: southeast_coordinates_offsets,
+                Movement.FORWARD_RIGHT: southwest_coordinates_offsets,
+                Movement.REVERSE_RIGHT: northwest_coordinates_offsets,
+                Movement.REVERSE_LEFT: northeast_coordinates_offsets,
+            },
+            Direction.EAST: {
+                Movement.FORWARD_LEFT: northeast_coordinates_offsets,
+                Movement.FORWARD_RIGHT: southeast_coordinates_offsets,
+                Movement.REVERSE_RIGHT: southwest_coordinates_offsets,
+                Movement.REVERSE_LEFT: northwest_coordinates_offsets,
+            },
+            Direction.WEST: {
+                Movement.FORWARD_LEFT: southwest_coordinates_offsets,
+                Movement.FORWARD_RIGHT: northwest_coordinates_offsets,
+                Movement.REVERSE_RIGHT: northeast_coordinates_offsets,
+                Movement.REVERSE_LEFT: southwest_coordinates_offsets,
+            },
+        }
+
+        intermediate_coordinates_occupied: Set[Coordinates] = set()
+        for x_coordinate_offset, y_coordinate_offset in coordinates_offsets[robot_position.direction][movement]:
+            intermediate_coordinates_occupied.add(
+                (robot_position.x_coordinate + x_coordinate_offset, robot_position.y_coordinate + y_coordinate_offset)
+            )
+        return intermediate_coordinates_occupied

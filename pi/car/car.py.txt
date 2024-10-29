@@ -1,0 +1,164 @@
+from time import sleep
+from typing import Dict, Optional
+
+from loguru import logger
+
+from algorithms.navigation.entities import Obstacle
+from algorithms.navigation.instruction import (
+    Instruction,
+    RecogniseImageInstruction,
+    MovementInstruction,
+)
+from image.detection import get_best_detection
+from image.names import (
+    VALID_LABEL_NAMES_FOR_DETECTION,
+    VALID_LABEL_NAMES_FOR_FASTEST_PATH,
+    get_image_id,
+)
+from pi.camera.detect import detect as camera_detect
+from pi.car.movements import (
+    get_effective_instructions,
+    IMAGE_RECOGNITION_RETRY_SIGNALS,
+)
+from pi.comm.messages import ImageMessage, LocationUpdateMessage
+from pi.comm.rfcomm import RfcommServerConnection
+from pi.comm.serial import SerialConnection
+
+
+class Car:
+    serial: SerialConnection
+    rfcomm: RfcommServerConnection
+    obstacles: Dict[str, Obstacle]
+
+    def __init__(self, serial: SerialConnection,
+                 rfcomm: RfcommServerConnection) -> None:
+        self.serial = serial
+        self.rfcomm = rfcomm
+        self.obstacles = None
+
+    def update_obstacles(self, obstacles: Dict[str, Obstacle]) -> None:
+        logger.info(f"Car remembered obstacles {obstacles}")
+        self.obstacles = obstacles
+
+    def init(self) -> None:
+        logger.info("Sending init signal to car")
+        self.serial.send(b"ZZZZZ")
+        logger.info("Waiting for 3 seconds")
+        sleep(3)
+
+    def execute(self, instruction: Instruction) -> None:
+        if isinstance(instruction, MovementInstruction):
+            self.move(instruction)
+        elif isinstance(instruction, RecogniseImageInstruction):
+            self.recognise_image(instruction)
+        else:
+            logger.error(f"Unexpected instruction: {instruction}")
+
+    def move(self, instruction: MovementInstruction) -> None:
+        logger.info(f"Car received movement instruction {instruction}")
+
+        try:
+            signals = get_effective_instructions(instruction)
+        except ValueError as e:
+            logger.error(f"Failed to translate movement instruction: {e}")
+            return
+        logger.info("Effective instructions: "
+                    f"{', '.join(str(signal) for signal in signals)}")
+
+        self.rfcomm.send(LocationUpdateMessage(instruction.end).serialize())
+        for signal in signals:
+            logger.info(f"Car sending movement signal {signal}")
+            self.serial.send(signal)
+            self.serial.receive()
+
+    def recognise_image(self, instruction: RecogniseImageInstruction) -> None:
+        logger.info(f"Car received image recognition instruction {instruction}")
+
+        position = instruction.image
+        obstacles = list(
+            map(
+                lambda kv: kv[0],
+                filter(lambda kv: kv[1].position == position,
+                       self.obstacles.items())))
+        if not obstacles:
+            logger.error(f"Unexpected obstacle at position {position}")
+            label = "dunno"
+        elif len(obstacles) > 1:
+            logger.error(f"Multiple obstacles {', '.join(obstacles)} "
+                         f"found at position {position}")
+            label = "dunno"
+        else:
+            label = obstacles[0]
+
+        attempt = 1
+        for _ in range(2):
+            logger.info(f"Car detecting image labelled {label} at position "
+                        f"{position} (attempt {attempt})")
+            detections = camera_detect(label, True,
+                                       VALID_LABEL_NAMES_FOR_DETECTION)
+            name = get_best_detection(detections,
+                                      VALID_LABEL_NAMES_FOR_DETECTION)
+            if name is not None:
+                image_id = get_image_id(name) or "dunno"
+                logger.info(f"Car recognised image: [{image_id}] {name}")
+                self.rfcomm.send(ImageMessage(label, str(image_id)).serialize())
+                return
+            attempt += 1
+
+        for signals, restore_signals in IMAGE_RECOGNITION_RETRY_SIGNALS:
+            logger.info(f"Retrying image recognition with movements {signals} "
+                        f"(attempt {attempt})")
+            for signal in signals:
+                self.serial.send(signal)
+                self.serial.receive()
+            detections = camera_detect(label, True,
+                                       VALID_LABEL_NAMES_FOR_DETECTION)
+            name = get_best_detection(detections,
+                                      VALID_LABEL_NAMES_FOR_DETECTION)
+            if name is not None:
+                image_id = get_image_id(name) or "dunno"
+                logger.info(f"Car recognised image: [{image_id}] {name}")
+                self.rfcomm.send(ImageMessage(label, str(image_id)).serialize())
+                for signal in restore_signals:
+                    self.serial.send(signal)
+                    self.serial.receive()
+                return
+            for signal in restore_signals:
+                self.serial.send(signal)
+                self.serial.receive()
+            attempt += 1
+
+        logger.error(f"Unable to detect image after {attempt} attempts")
+
+    def check_direction(self, label: str) -> Optional[str]:
+        for attempt in range(1, 6):
+            logger.info(f"Checking direction for {label} (attempt {attempt})")
+
+            if attempt >= 4:
+                signals, restore_signals = IMAGE_RECOGNITION_RETRY_SIGNALS[
+                    attempt - 4]
+                logger.info(f"Retrying with movements {signals}")
+                for signal in signals:
+                    self.serial.send(signal)
+                    self.serial.receive()
+
+            detections = camera_detect(label, False,
+                                       VALID_LABEL_NAMES_FOR_FASTEST_PATH)
+            best = get_best_detection(detections,
+                                      VALID_LABEL_NAMES_FOR_FASTEST_PATH)
+
+            if best is not None and best.name in ("left", "right"):
+                logger.info(f"Direction for {label}: {best.name}")
+                if attempt >= 4:
+                    for signal in restore_signals:
+                        self.serial.send(signal)
+                        self.serial.receive()
+                return best.name
+
+            logger.warning(f"Failed to detect direction for {label}")
+            if attempt >= 4:
+                for signal in restore_signals:
+                    self.serial.send(signal)
+                    self.serial.receive()
+
+        return None

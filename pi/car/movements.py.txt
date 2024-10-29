@@ -1,0 +1,62 @@
+from typing import List
+
+from algorithms.navigation.entities import Movement
+from algorithms.navigation.instruction import MovementInstruction
+from pi import constants
+from pi.car.environment import OUTDOOR
+
+MOVEMENT_SIGNAL_PREFIXES = {
+    Movement.FORWARD: "SF",
+    Movement.FORWARD_LEFT: "LF",
+    Movement.FORWARD_RIGHT: "RF",
+    Movement.REVERSE: "SB",
+    Movement.REVERSE_LEFT: "LB",
+    Movement.REVERSE_RIGHT: "RB",
+}
+
+STRAIGHT_MOVEMENT_UNIT = 50 if OUTDOOR else 100
+
+CALIBRATION_INSTRUCTIONS = [b"LF015", b"LB015"] if OUTDOOR else []
+# CALIBRATION_INSTRUCTIONS = []
+
+TURNING_MOVEMENT_EFFECTIVE_INSTRUCTIONS = {
+    Movement.FORWARD_LEFT: [b"LF032", b"RB028", b"LF030", b"SB015"],
+    Movement.FORWARD_RIGHT: [b"RF030", b"LB040", b"RF020", b"SB011"],
+    Movement.REVERSE_LEFT: [b"LB027", b"SF008", b"RF033", b"LB030", b"SB010"],
+    Movement.REVERSE_RIGHT: [b"RB022", b"SF012", b"LF039", b"RB029", b"SB006"],
+}
+
+IMAGE_RECOGNITION_RETRY_SIGNALS = [
+    ([b"SF005"], [b"SB005"]),
+    ([b"SB005"], [b"SF005"]),
+]
+
+
+def get_effective_instructions(
+        movement_instruction: MovementInstruction) -> List[bytes]:
+
+    if movement_instruction.movement in (Movement.FORWARD, Movement.REVERSE):
+        prefix = MOVEMENT_SIGNAL_PREFIXES[movement_instruction.movement]
+        total_distance = movement_instruction.repetitions * constants.CELL_WIDTH
+
+        straight_movement_splits = total_distance // STRAIGHT_MOVEMENT_UNIT
+        distances = [STRAIGHT_MOVEMENT_UNIT] * straight_movement_splits
+        straight_movement_remainder = total_distance % STRAIGHT_MOVEMENT_UNIT
+        if straight_movement_remainder != 0:
+            distances.append(straight_movement_remainder)
+
+        movements = [
+            e for d in distances
+            for e in ([(prefix + "{:03}".format(d)).encode()] +
+                      CALIBRATION_INSTRUCTIONS)
+        ]
+        return movements
+
+    if movement_instruction.movement in (Movement.FORWARD_LEFT,
+                                         Movement.FORWARD_RIGHT,
+                                         Movement.REVERSE_LEFT,
+                                         Movement.REVERSE_RIGHT):
+        return TURNING_MOVEMENT_EFFECTIVE_INSTRUCTIONS[
+            movement_instruction.movement]
+
+    raise ValueError("Unexpected instruction")

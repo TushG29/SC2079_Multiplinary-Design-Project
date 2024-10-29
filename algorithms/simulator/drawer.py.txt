@@ -1,0 +1,401 @@
+from typing import Tuple
+
+import pygame
+
+from algorithms import constants
+from algorithms.navigation.entities import (
+    Obstacle,
+    SimulatorPosition,
+    CoordinatesTransformer,
+    Direction,
+    Position,
+    Movement,
+)
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.robot import Robot
+from algorithms.simulator.assets.assets import (
+    OBSTACLE_IMG_N_VISITED,
+    OBSTACLE_IMG_W_VISITED,
+    OBSTACLE_IMG_E_VISITED,
+    OBSTACLE_IMG_N,
+    OBSTACLE_IMG_S,
+    OBSTACLE_IMG_W,
+    OBSTACLE_IMG_E,
+    OBSTACLE_IMG_S_VISITED,
+    ROBOT_IMG_FILE,
+)
+
+
+class Drawer:
+    def __init__(self, surface: pygame.Surface):
+        self.surface: pygame.Surface = surface
+
+    def draw(self) -> None:
+        pass
+
+
+class ObstacleDrawer(Drawer):
+    def __init__(self, surface: pygame.Surface, obstacle: Obstacle):
+        super().__init__(surface)
+        self.obstacle: Obstacle = obstacle
+
+    def draw(self) -> None:
+        """
+        This method draws a single obstacle onto the pygame window.
+        """
+        simulator_position = SimulatorPosition(
+            self.obstacle.position.x_coordinate, self.obstacle.position.y_coordinate, self.obstacle.position.direction
+        )
+        transformed = CoordinatesTransformer.convert_obstacle_coordinates(simulator_position)
+        obstacle_grid_destination = (transformed.x, transformed.y)
+        obs_dir = self.obstacle.position.direction
+
+        if obs_dir == Direction.NORTH:
+            obs_img = OBSTACLE_IMG_N_VISITED if self.obstacle.visited else OBSTACLE_IMG_N
+        elif obs_dir == Direction.SOUTH:
+            obs_img = OBSTACLE_IMG_S_VISITED if self.obstacle.visited else OBSTACLE_IMG_S
+        elif obs_dir == Direction.EAST:
+            obs_img = OBSTACLE_IMG_W_VISITED if self.obstacle.visited else OBSTACLE_IMG_W
+        else:
+            obs_img = OBSTACLE_IMG_E_VISITED if self.obstacle.visited else OBSTACLE_IMG_E
+
+        self.surface.blit(obs_img, obstacle_grid_destination)
+
+
+class GridDrawer(Drawer):
+    def __init__(self, surface: pygame.Surface, grid: Grid):
+        super().__init__(surface)
+        self.grid: Grid = grid
+
+    def draw(self) -> None:
+        """
+        Draws the grid lines when called
+        """
+        pygame_width = self.grid.width * constants.PYGAME_SCALE
+        pygame_height = self.grid.height * constants.PYGAME_SCALE
+
+        # Vertical line
+        for i in range(self.grid.width + 1):
+            pygame.draw.line(
+                self.surface,
+                constants.COLOR_GRID_LINE,
+                (i * constants.PYGAME_SCALE, 0),
+                (i * constants.PYGAME_SCALE, pygame_height),
+            )
+        # Horizontal line
+        for i in range(self.grid.height + 1):
+            pygame.draw.line(
+                self.surface,
+                constants.COLOR_GRID_LINE,
+                (0, pygame_height - (i * constants.PYGAME_SCALE)),
+                (pygame_width, pygame_height - (i * constants.PYGAME_SCALE)),
+            )
+
+
+class RobotDrawer(Drawer):
+    def __init__(self, surface: pygame.Surface, robot: Robot):
+        super().__init__(surface)
+        self.robot = robot
+
+        self.obs_visited: int = 0
+        self.path_hist = []  # Stores the history of the path taken by the robot.
+
+        # Current position is for simulator use only
+        self.starting_simulator_position = SimulatorPosition(
+            robot.starting_position.x_coordinate,
+            robot.starting_position.y_coordinate,
+            robot.starting_position.direction,
+        )
+        self.current_position = SimulatorPosition(
+            robot.starting_position.x_coordinate,
+            robot.starting_position.y_coordinate,
+            robot.starting_position.direction,
+        )
+
+        self.image = pygame.transform.scale(ROBOT_IMG_FILE, (constants.ROBOT_WIDTH, constants.ROBOT_HEIGHT))
+
+        # Initialise the angle(orientation) of the robot i.e facing N/S/E/W, N = 0, S = 180
+        # Needs to be in degrees format as only that is accepted by pygame
+        self.angle = constants.ROBOT_START_ANGLE
+
+        # Initialise the velocity(speed) of the robot
+        self.velocity = constants.ROBOT_VELOCITY
+
+    def draw(self) -> None:
+        """
+        This method draws the robot onto the grid and is called whenever there is a change in the robot simulator
+        position.
+        """
+
+        new_angle = self.angle
+        updated_robot = pygame.transform.rotate(self.image, new_angle)
+
+        # converts to scaled robot coordinates for display on simulator
+        converted_robot_coord = CoordinatesTransformer.convert_robot_coordinates(self.current_position)
+        pos_pair: Tuple[int, int] = (converted_robot_coord.x, converted_robot_coord.y)
+        self.surface.blit(updated_robot, pos_pair)
+
+    def is_movement_complete(self, target: SimulatorPosition):
+        """
+        This method checks if the movement of the particular path segment has been completed.
+        """
+        current_converted = CoordinatesTransformer.convert_robot_coordinates(self.current_position)
+        target_converted = CoordinatesTransformer.convert_robot_coordinates(target)
+        return (
+            abs(current_converted.x - target_converted.x) < self.velocity
+            and abs(current_converted.y - target_converted.y) < self.velocity
+        )
+
+    def handle_movement(self, instruction, sim):
+        """
+        This method handles the movement whenever a new path segment is given in simulator.py.
+        It will do so by calling the corresponding function of the given movement in the path segment.
+        """
+        temp_initial_pos: Position = instruction.start
+        initial_pos: SimulatorPosition = SimulatorPosition(
+            temp_initial_pos.x_coordinate, temp_initial_pos.y_coordinate, temp_initial_pos.direction
+        )
+
+        movement: Movement = instruction.movement
+
+        temp_target_pos: Position = instruction.end
+        target_pos: SimulatorPosition = SimulatorPosition(
+            temp_target_pos.x_coordinate, temp_target_pos.y_coordinate, temp_target_pos.direction
+        )
+
+        if target_pos.direction == Direction.NORTH:
+            target_angle = 0
+        elif target_pos.direction == Direction.SOUTH:
+            target_angle = 180
+        elif target_pos.direction == Direction.EAST:
+            target_angle = -90
+        elif target_pos.direction == Direction.WEST:
+            target_angle = 90
+
+        if movement == Movement.FORWARD:
+            self.forward_movement(initial_pos, target_pos, sim, target_angle)
+
+        elif movement == Movement.REVERSE:
+            self.reverse_movement(initial_pos, target_pos, sim, target_angle)
+
+        elif movement == Movement.FORWARD_RIGHT:
+            self.forward_right_movement(initial_pos, target_pos, sim, target_angle)
+
+        elif movement == Movement.FORWARD_LEFT:
+            self.forward_left_movement(initial_pos, target_pos, sim, target_angle)
+
+        elif movement == Movement.REVERSE_LEFT:
+            self.reverse_left_movement(initial_pos, target_pos, sim, target_angle)
+
+        elif movement == Movement.REVERSE_RIGHT:
+            self.reverse_right_movement(initial_pos, target_pos, sim, target_angle)
+
+    def forward_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_angle = self.angle
+        target_direction = target_pos.direction
+        velocity = self.velocity
+
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, target_angle, sim)
+        self.__adjust_robot(target_pos, initial_angle, sim, target_direction)
+
+    def reverse_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_angle = self.angle
+        target_direction = target_pos.direction
+        velocity = -self.velocity
+
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, target_angle, sim)
+        self.__adjust_robot(target_pos, initial_angle, sim, target_direction)
+
+    def reverse_left_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_direction = initial_pos.direction
+        initial_angle = self.angle
+        turn_direction = target_direction = target_pos.direction
+        velocity = -self.velocity
+
+        # Move to reach to the same x/y coordinate level as the target position
+        if initial_direction == Direction.NORTH:
+            back_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.EAST
+        elif initial_direction == Direction.SOUTH:
+            back_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.WEST
+        elif initial_direction == Direction.EAST:
+            back_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.SOUTH
+        elif initial_direction == Direction.WEST:
+            back_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.NORTH
+
+        while not self.is_movement_complete(back_target):
+            self.forward(velocity, initial_angle, sim)
+        self.__adjust_robot(back_target, initial_angle, sim, initial_direction)
+
+        # Rotate image to correct direction
+        self.rotate_image(turn_direction, sim)
+
+        # Move to the correct position now
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, self.angle, sim)
+        self.__adjust_robot(target_pos, target_angle, sim, target_direction)
+
+    def reverse_right_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_direction = initial_pos.direction
+        initial_angle = self.angle
+        turn_direction = target_direction = target_pos.direction  # default value
+        velocity = -self.velocity
+
+        # Move to reach to the same x/y coordinate level as the target position
+        if initial_direction == Direction.NORTH:
+            back_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.WEST
+        elif initial_direction == Direction.SOUTH:
+            back_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.EAST
+        elif initial_direction == Direction.EAST:
+            back_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.NORTH
+        elif initial_direction == Direction.WEST:
+            back_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.SOUTH
+
+        while not self.is_movement_complete(back_target):
+            self.forward(velocity, initial_angle, sim)
+        self.__adjust_robot(back_target, initial_angle, sim, initial_direction)
+
+        # Rotate image to correct direction
+        self.rotate_image(turn_direction, sim)
+
+        # Move to the correct position now
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, self.angle, sim)
+        self.__adjust_robot(target_pos, target_angle, sim, target_direction)
+
+    def forward_right_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_direction = initial_pos.direction
+        initial_angle = self.angle
+        turn_direction = target_direction = target_pos.direction
+        velocity = self.velocity
+
+        # Move to reach to the same x/y coordinate level as the target position
+        if initial_direction == Direction.NORTH:
+            forward_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.EAST
+        elif initial_direction == Direction.SOUTH:
+            forward_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.WEST
+        elif initial_direction == Direction.EAST:
+            forward_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.SOUTH
+        elif initial_direction == Direction.WEST:
+            forward_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.NORTH
+
+        while not self.is_movement_complete(forward_target):
+            self.forward(velocity, initial_angle, sim)
+        self.__adjust_robot(forward_target, initial_angle, sim, initial_direction)
+
+        # Rotate image to correct direction
+        self.rotate_image(turn_direction, sim)
+
+        # Move to the correct position now
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, self.angle, sim)
+        self.__adjust_robot(target_pos, target_angle, sim, target_direction)
+
+    def forward_left_movement(self, initial_pos, target_pos, sim, target_angle):
+        initial_direction = initial_pos.direction
+        initial_angle = self.angle
+        turn_direction = target_direction = target_pos.direction
+        velocity = self.velocity
+
+        # Move to reach to the same x/y coordinate level as the target position
+        if initial_direction == Direction.NORTH:
+            forward_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.WEST
+        elif initial_direction == Direction.SOUTH:
+            forward_target = Position(initial_pos.x_coordinate, target_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.EAST
+        elif initial_direction == Direction.EAST:
+            forward_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.NORTH
+        elif initial_direction == Direction.WEST:
+            forward_target = Position(target_pos.x_coordinate, initial_pos.y_coordinate, initial_pos.direction)
+            turn_direction = Direction.SOUTH
+
+        while not self.is_movement_complete(forward_target):
+            self.forward(velocity, initial_angle, sim)
+        self.__adjust_robot(forward_target, initial_angle, sim, initial_direction)
+
+        # Rotate image to correct direction
+        self.rotate_image(turn_direction, sim)
+
+        # Move to the correct position now
+        while not self.is_movement_complete(target_pos):
+            self.forward(velocity, self.angle, sim)
+        self.__adjust_robot(target_pos, target_angle, sim, target_direction)
+
+    def rotate_image(self, target_direction, sim):
+        """
+        This function is to rotate the direction of the robot car.
+        It updates the self.angle value and calls update.display() so that rotation appears on the simulator.
+        """
+        if target_direction == Direction.NORTH:
+            self.angle = 0
+            self.current_position.direction == Direction.NORTH
+        elif target_direction == Direction.SOUTH:
+            self.angle = 180
+            self.current_position.direction == Direction.SOUTH
+        elif target_direction == Direction.EAST:
+            self.angle = -90
+            self.current_position.direction == Direction.EAST
+        elif target_direction == Direction.WEST:
+            self.angle = 90
+            self.current_position.direction == Direction.WEST
+
+        sim.update_display()
+
+    def forward(self, velocity, robot_orientation, sim):
+        """
+        This function allows the robot to move in a straight line. It works for reverse as well.
+         -velocity is passed in so that it can reverse
+        """
+        if robot_orientation == 0:
+            x_step = 0
+            y_step = -1
+        elif robot_orientation == 180:
+            x_step = 0
+            y_step = 1
+        elif robot_orientation == 90:
+            x_step = -1
+            y_step = 0
+        elif robot_orientation == -90:
+            x_step = 1
+            y_step = 0
+
+        self.current_position.x_coordinate = self.current_position.x_coordinate + (x_step * velocity)
+        self.current_position.y_coordinate = self.current_position.y_coordinate + (y_step * velocity)
+
+        sim.update_display()
+
+    def __adjust_robot(self, target_pos, target_angle, sim, dir):
+        """
+        This function ensures that robot sits perfectly on the grid cell This is required as the angle/position might
+        be off by a tiny margin when the robot finish executing each instruction
+        """
+        self.current_position = target_pos
+        self.current_position.direction = dir
+        self.angle = target_angle
+        sim.update_display()
+
+    def draw_historic_path(self):
+        if len(self.path_hist) == 0 or self.current_position != self.path_hist[-1]:
+            # Only add a new point history if there is none, and it is different from previous history.
+            self.path_hist.append(self.current_position)
+        for dot in self.path_hist:
+            dot_convert = (
+                dot.x_coordinate * constants.PYGAME_SCALE + 15,
+                dot.y_coordinate * constants.PYGAME_SCALE + 15,
+            )
+            pygame.draw.circle(self.surface, constants.BLACK, dot_convert, 5)

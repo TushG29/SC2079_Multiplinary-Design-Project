@@ -1,0 +1,137 @@
+import pygame
+
+from algorithms import constants
+
+
+class Interface(object):
+    def __init__(self, window):
+        self.window = window
+        self.buttons = []
+
+        self.resetButton = Button(
+            window,
+            constants.BTNCOLOR_RESET,
+            constants.RESETBTN_X,
+            constants.RESETBTN_Y,
+            constants.BTNWIDTH,
+            constants.BTNHEIGHT,
+            "Reset",
+            constants.BTN_FONTSIZE,
+            constants.BLACK,
+            constants.BTN_RESETFUNC,
+        )
+        self.buttons.append(self.resetButton)
+
+        self.startButton = Button(
+            window,
+            constants.BTNCOLOR_START,
+            constants.STARTBTN_X,
+            constants.STARTBTN_Y,
+            constants.BTNWIDTH,
+            constants.BTNHEIGHT,
+            "Start",
+            constants.BTN_FONTSIZE,
+            constants.BLACK,
+            constants.BTN_STARTFUNC,
+        )
+        self.buttons.append(self.startButton)
+
+        self.obstacleButton = Button(
+            window,
+            constants.BTNCOLOR_OBSTACLE,
+            constants.OBSBTN_X,
+            constants.OBSBTN_Y,
+            constants.BTNWIDTH,
+            constants.BTNHEIGHT,
+            "Generate Obstacles",
+            constants.BTN_FONTSIZE,
+            constants.BLACK,
+            constants.BTN_OBSTACLEFUNC,
+        )
+        self.buttons.append(self.obstacleButton)
+
+    def draw_interface(self, obs_visited):
+        """
+        This function is to draw out the buttons onto the simulator.
+        """
+        for button in self.buttons:
+            button.draw_button()
+
+        button.draw_score(obs_visited)
+
+    def check_button_pressed(self):
+        """
+        This function is to check if a button is pressed and if so, pass back the button function for it.
+        Which is a constant that describes what the function is i.e "RESET"
+        """
+        for button in self.buttons:
+            if button.is_pressed():
+                return button.button_function()
+
+
+class Button:
+    def __init__(self, surface, color, x, y, length, height, text, font_size, text_color, button_func):
+        self.surface = surface
+        self.color = color
+        self.x = x
+        self.y = y
+        self.length = length
+        self.height = height
+        self.width = 0
+        self.text = text
+        self.text_color = text_color
+        self.button_func = button_func
+
+        self.rect = pygame.Rect(x, y, length, height)
+        self.font_size = font_size
+        self.font_type = pygame.font.SysFont("Calibri", self.font_size)
+
+        self.draw_button()
+
+    def draw_score(self, obstacles_num):
+        font = pygame.font.SysFont("Calibri", 36)
+        score_text = font.render(f"Obstacles visited: {obstacles_num}", True, (0, 0, 0))
+        self.surface.blit(score_text, (22 * constants.PYGAME_SCALE, 5 * constants.PYGAME_SCALE))
+
+    def draw_button(self):
+        """
+        For buttons to appear on the interface using a list of buttons created during initialization of interface.
+        """
+        for i in range(1, 3):
+            s = pygame.Surface((self.length + (i * 2), self.height + (i * 2)))
+            s.fill(self.color)
+            alpha = 255 / (i + 2)
+            if alpha <= 0:
+                alpha = 1
+            s.set_alpha(alpha)
+            pygame.draw.rect(
+                s,
+                self.color,
+                (self.x - i, self.y - i, self.length + i, self.height + i),
+                self.width,
+            )
+            self.surface.blit(s, (self.x - i, self.y - i))
+        pygame.draw.rect(self.surface, self.color, (self.x, self.y, self.length, self.height), 0)
+        pygame.draw.rect(self.surface, (190, 190, 190), (self.x, self.y, self.length, self.height), 1)
+        # Render text on button
+        my_text = self.font_type.render(self.text, 1, self.text_color)
+        self.surface.blit(
+            my_text,
+            (
+                (self.x + self.length / 2) - my_text.get_width() / 2,
+                (self.y + self.height / 2) - my_text.get_height() / 2,
+            ),
+        )
+
+    def button_function(self):
+        """
+        This function returns the constant button_function when called.
+        """
+        return self.button_func
+
+    def is_pressed(self):
+        """
+        This function checks if the button has actually been pressed and returns a True/False bool.
+        """
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        return self.rect.collidepoint(mouse_x, mouse_y)

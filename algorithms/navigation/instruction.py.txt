@@ -1,0 +1,69 @@
+from typing import Union, List
+
+from algorithms.navigation.entities import Position, Movement
+
+
+class MovementInstruction:
+    def __init__(self, start: Position, movement: Movement, end: Position, repetitions: int = 1):
+        self.start: Position = start
+        self.movement: Movement = movement
+        self.repetitions: int = repetitions
+        self.end: Position = end
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, MovementInstruction)
+            and self.start == other.start
+            and self.movement == other.movement
+            and self.end == other.end
+        )
+
+    def __repr__(self):
+        return (
+            f"MovementInstruction({self.start.__repr__()}, {self.movement.__repr__()}, {self.repetitions}, "
+            f"{self.end.__repr__()})"
+        )
+
+
+class RecogniseImageInstruction:
+    def __init__(self, image: Position):
+        self.image: Position = image
+
+    def __repr__(self):
+        return f"RecogniseImageInstruction({self.image})"
+
+
+Instruction = Union[MovementInstruction, RecogniseImageInstruction]
+
+
+def compress_instructions(instructions: List[Instruction]) -> List[Instruction]:
+    """
+    Compresses a sequence of instructions such that consecutive straight movement instructions that are the same are
+    combined into a single instance of MovementInstruction.
+
+    Args:
+        instructions: The list of instructions to be compressed.
+
+    Returns:
+        A list of compressed instructions.
+    """
+    compressed_instructions: List[Instruction] = []
+    for instruction in instructions:
+        if (
+            not compressed_instructions
+            or not isinstance(compressed_instructions[-1], MovementInstruction)
+            or not isinstance(instruction, MovementInstruction)
+            or compressed_instructions[-1].movement != instruction.movement
+            or not instruction.movement.is_straight()
+        ):
+            compressed_instructions.append(instruction)
+            continue
+        last_compressed_instruction: Instruction = compressed_instructions.pop()
+        recompressed_instruction: Instruction = MovementInstruction(
+            start=last_compressed_instruction.start,
+            movement=last_compressed_instruction.movement,
+            repetitions=last_compressed_instruction.repetitions + 1,
+            end=instruction.end,
+        )
+        compressed_instructions.append(recompressed_instruction)
+    return compressed_instructions

@@ -1,0 +1,70 @@
+from time import sleep
+
+import cv2
+import numpy
+
+from image.detect import detect
+from pi.comm.serial import SerialConnection
+
+SERIAL_PORT_GLOB = "/dev/ttyUSB*"
+SERIAL_BAUDRATE = 115200
+
+
+def draw_boxes_on_image(img, result):
+    img = numpy.array(img)
+    detection_count = result.boxes.shape[0]
+    for i in range(detection_count):
+        cls = int(result.boxes.cls[i].item())
+        name = result.names[cls]
+        confidence = float(result.boxes.conf[i].item())
+        text = f"{name} ({confidence})"
+        box = result.boxes.xyxy[i]
+        start_point = (int(box[0]), int(box[1]))
+        end_point = (int(box[2]), int(box[3]))
+        cv2.rectangle(img, start_point, end_point, (127, 127, 127), 2)
+        cv2.putText(img, text, (start_point[0], start_point[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (127, 127, 127), 2)
+    return img
+
+
+# This will not work anymore due to an API change.
+def a5():
+    serial = SerialConnection(SERIAL_PORT_GLOB, SERIAL_BAUDRATE)
+
+    _, _, name = detect()
+    while name is None:
+        serial.send(b"SF015")
+        _, _, name = detect()
+
+    if name != "VisualMarker":
+        return
+
+    serial.send(b"SB040")
+    sleep(5)
+
+    serial.send(b"RF090")
+    sleep(5)
+    serial.send(b"LF180")
+    sleep(5)
+
+    for _ in range(3):
+        _, _, name = detect()
+        while name is None:
+            serial.send(b"SB010")
+            _, _, name = detect()
+
+        if name != "VisualMarker":
+            return
+
+        serial.send(b"SB040")
+        sleep(5)
+
+        serial.send(b"RF090")
+        sleep(5)
+        serial.send(b"LF180")
+        sleep(5)
+
+        _, _, name = detect()
+        while name is None:
+            serial.send(b"SB010")
+            _, _, name = detect()

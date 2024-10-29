@@ -1,0 +1,10 @@
+package com.mdp.group20.map;
+
+import java.util.Observable;
+
+public class MySubject extends Observable {
+    public void changeInstruction() {
+        setChanged();
+        notifyObservers();
+    }
+}

@@ -1,0 +1,21 @@
+from loguru import logger
+
+from algorithms.navigation.instruction import MovementInstruction
+from pi.car.car import Car
+from pi.comm.messages import parse_message, MovementMessage
+from pi.comm.rfcomm import RfcommServerConnection
+
+
+def process(car: Car, rfcomm: RfcommServerConnection, data: str):
+    message = parse_message(data)
+    if message is None:
+        rfcomm.send(f"Could not parse message {data}")
+        logger.error(f"Could not parse message {data}")
+        return
+
+    rfcomm.send(f"Parsed message {message}")
+    logger.info(f"Parsed message {message}")
+
+    if isinstance(message, MovementMessage):
+        instruction = MovementInstruction(None, message.movement, None, 1)
+        car.move(instruction)

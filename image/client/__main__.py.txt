@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+
+from PIL import Image
+
+from image.client.detect import detect as client_detect
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print(f"Usage: python3 {sys.argv[0]} <images>...", file=sys.stderr)
+        sys.exit(1)
+
+    for path in sys.argv[2:]:
+        client_detect(Image.open(path), path)

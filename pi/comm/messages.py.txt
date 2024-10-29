@@ -1,0 +1,281 @@
+from enum import auto, Enum
+from typing import Callable, Dict, Optional, Union
+
+from algorithms.navigation.entities import (
+    Direction,
+    Movement,
+    Obstacle,
+    Position,
+)
+
+DIRECTIONS_SERIALIZE = {
+    Direction.NORTH: "N",
+    Direction.SOUTH: "S",
+    Direction.EAST: "E",
+    Direction.WEST: "W",
+}
+
+DIRECTIONS_DESERIALIZE = dict((v, k) for (k, v) in DIRECTIONS_SERIALIZE.items())
+
+
+def parse_position(s: str) -> Optional[Position]:
+    tokens = s.split(",")
+    if len(tokens) != 3:
+        return None
+    try:
+        row = int(tokens[0])
+        col = int(tokens[1])
+        direction = DIRECTIONS_DESERIALIZE[tokens[2]]
+    except (ValueError, KeyError):
+        return None
+    return Position(row, col, direction)
+
+
+def serialize_position(position: Position) -> str:
+    return ",".join(
+        map(lambda x: str(x), [
+            position.x_coordinate,
+            position.y_coordinate,
+            DIRECTIONS_SERIALIZE[position.direction],
+        ]))
+
+
+class OperationMode(Enum):
+    DISCOVER_OBSTACLES = auto()
+    FASTEST_PATH = auto()
+
+    @staticmethod
+    def parse(repr: str) -> Optional["OperationMode"]:
+        REPR_DESERIALIZE = {
+            "discoverObstacles": OperationMode.DISCOVER_OBSTACLES,
+            "fastestPath": OperationMode.FASTEST_PATH,
+        }
+        if repr not in REPR_DESERIALIZE:
+            return None
+        return REPR_DESERIALIZE[repr]
+
+    @staticmethod
+    def serialize(mode: "OperationMode") -> str:
+        return {
+            OperationMode.DISCOVER_OBSTACLES: "discoverObstacles",
+            OperationMode.FASTEST_PATH: "fastestPath",
+        }[mode]
+
+
+class ModeMessage:
+    mode: OperationMode
+
+    def __init__(self, mode: OperationMode) -> None:
+        self.mode = mode
+
+    def __repr__(self) -> str:
+        return f"ModeMessage({OperationMode.serialize(self.mode)})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["ModeMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) != 2:
+            return None
+        mode = OperationMode.parse(tokens[1])
+        if mode is None:
+            return None
+        return ModeMessage(mode)
+
+    def serialize(self) -> str:
+        return f"mode {OperationMode.serialize(self.mode)}"
+
+
+class StartPointMessage:
+    position: Position
+
+    def __init__(self, position: Position) -> None:
+        self.position = position
+
+    def __repr__(self) -> str:
+        return f"StartPointMessage({self.position.__repr__()})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["StartPointMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) != 2:
+            return None
+        position = parse_position(tokens[1])
+        if position is None:
+            return None
+        return StartPointMessage(position)
+
+    def serialize(self) -> str:
+        return f"startPoint {serialize_position(self.position)}"
+
+
+class ObstaclesMessage:
+    obstacles: Dict[str, Obstacle]
+
+    def __init__(self, obstacles: Dict[str, Obstacle]) -> None:
+        self.obstacles = obstacles
+
+    def __repr__(self) -> str:
+        obstacles_repr = "; ".join(
+            map(lambda kv: f"{kv[0]}: {kv[1].__repr__()}",
+                sorted(self.obstacles.items())))
+        return f"ObstaclesMessage({obstacles_repr})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["ObstaclesMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) % 2 != 1:
+            return None
+
+        obstacles: Dict[str, Obstacle] = {}
+        for label, position_str in zip(tokens[1::2], tokens[2::2]):
+            position = parse_position(position_str)
+            if position is None:
+                return None
+            obstacles[label] = Obstacle(position)
+
+        return ObstaclesMessage(obstacles)
+
+    def serialize(self) -> str:
+        obstacles_serialized = list(
+            map(lambda kv: f"{kv[0]} {serialize_position([kv[1]])}",
+                sorted(self.obstacles.items())))
+        return f"obstacles {' '.join(obstacles_serialized)}"
+
+
+class LocationUpdateMessage:
+    position: Position
+
+    def __init__(self, position: Position) -> None:
+        self.position = position
+
+    def __repr__(self) -> str:
+        return f"LocationUpdateMessage({self.position.__repr__()})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["LocationUpdateMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) != 2:
+            return None
+        position = parse_position(tokens[1])
+        if position is None:
+            return None
+        return LocationUpdateMessage(position)
+
+    def serialize(self) -> str:
+        return f"locationUpdate {serialize_position(self.position)}"
+
+
+class ImageMessage:
+    obstacle: str
+    image: str
+
+    def __init__(self, obstacle: str, image: str) -> None:
+        self.obstacle = obstacle
+        self.image = image
+
+    def __repr__(self) -> str:
+        return f"ImageMessage({self.obstacle}, {self.image})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["ImageMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) != 3:
+            return None
+        obstacle = tokens[1]
+        image = tokens[2]
+        return ImageMessage(obstacle, image)
+
+    def serialize(self) -> str:
+        return f"image {self.obstacle} {self.image}"
+
+
+MOVEMENTS_SERIALIZE = {
+    Movement.FORWARD: "f",
+    Movement.FORWARD_LEFT: "l",
+    Movement.FORWARD_RIGHT: "r",
+    Movement.REVERSE: "b",
+    Movement.REVERSE_LEFT: "L",
+    Movement.REVERSE_RIGHT: "R",
+}
+
+MOVEMENTS_DESERIALIZE = dict((v, k) for (k, v) in MOVEMENTS_SERIALIZE.items())
+
+
+class MovementMessage:
+    movement: Movement
+
+    def __init__(self, movement: Movement) -> None:
+        self.movement = movement
+
+    def __repr__(self) -> str:
+        return f"MovementMessage({self.movement.__repr__()})"
+
+    @staticmethod
+    def parse(message: str) -> Optional["MovementMessage"]:
+        tokens = message.strip().split()
+        if len(tokens) != 2:
+            return None
+        movement = tokens[1]
+        if movement not in MOVEMENTS_DESERIALIZE:
+            return None
+        return MovementMessage(MOVEMENTS_DESERIALIZE[movement])
+
+    def serialize(self) -> str:
+        return f"movement {MOVEMENTS_SERIALIZE[self.movement]}"
+
+
+class StopMessage:
+
+    def __init__(self) -> None:
+        pass
+
+    def __repr__(self) -> str:
+        return "StopMessage"
+
+    @staticmethod
+    def parse(message: str) -> Optional["StopMessage"]:
+        if message.strip() != "stop":
+            return None
+        return StopMessage()
+
+    def serialize(self) -> str:
+        return "stop"
+
+
+MESSAGE_PARSERS: Dict[str, Callable[[str], Union[
+    None,
+    ModeMessage,
+    StartPointMessage,
+    ObstaclesMessage,
+    LocationUpdateMessage,
+    ImageMessage,
+    MovementMessage,
+    StopMessage,
+]]] = {
+    "mode": ModeMessage.parse,
+    "startPoint": StartPointMessage.parse,
+    "obstacles": ObstaclesMessage.parse,
+    "locationUpdate": LocationUpdateMessage.parse,
+    "image": ImageMessage.parse,
+    "movement": MovementMessage.parse,
+    "stop": StopMessage.parse,
+}
+
+
+def parse_message(
+    message: str
+) -> Union[
+        None,
+        ModeMessage,
+        StartPointMessage,
+        ObstaclesMessage,
+        LocationUpdateMessage,
+        ImageMessage,
+        MovementMessage,
+        StopMessage,
+]:
+    message = message.strip()
+    for prefix, parser in MESSAGE_PARSERS.items():
+        if message.startswith(prefix):
+            return parser(message)
+    return None

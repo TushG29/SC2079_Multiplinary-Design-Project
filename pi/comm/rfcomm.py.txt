@@ -1,0 +1,120 @@
+from queue import Queue
+from socket import socket
+from threading import Lock, Thread
+from typing import Any, Callable, Union
+
+import bluetooth
+from loguru import logger
+
+
+# Adapted from:
+# https://github.com/pybluez/pybluez/blob/4d46ce14d9e888e3b0c65d5d3ba2a703f8e5e861/examples/simple/rfcomm-server.py
+class RfcommServerConnection:
+    MESSAGE_DELIMITER = "\n"
+
+    service_name: str
+    service_uuid: str
+    message_callback: Callable[[str], None]
+
+    server_sock: bluetooth.BluetoothSocket
+    client_sock: socket
+    port: Union[Any, int]
+
+    reconnect_mutex: Lock
+
+    message_queue: "Queue[bytes]"
+    receive_buffer: str
+
+    def __init__(self, service_name: str, service_uuid: str,
+                 message_callback: Callable[[str], None]) -> None:
+        self.service_name = service_name
+        self.service_uuid = service_uuid
+        self.message_callback = message_callback
+
+        self.server_sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+        self.server_sock.bind(("", 1))
+        self.server_sock.listen(1)
+        self.port = self.server_sock.getsockname()[1]
+        bluetooth.advertise_service(
+            sock=self.server_sock,
+            name=service_name,
+            service_id=service_uuid,
+            service_classes=[service_uuid, bluetooth.SERIAL_PORT_CLASS],
+            profiles=[bluetooth.SERIAL_PORT_PROFILE],
+            # protocols=[bluetooth.OBEX_UUID],
+        )
+
+        self.reconnect_mutex = Lock()
+        self._reconnect()
+
+        self.message_queue = Queue()
+        self.receive_buffer = ""
+        Thread(target=self._send_worker, args=[]).start()
+        Thread(target=self._receive, args=[]).start()
+
+    def _reconnect(self) -> None:
+        # We don't allow this to be called by multiple threads simultaneously.
+        # Therefore, if one thread is already attempting to reconnect, the other
+        # threads will not make any attempt to reconnect, and instead block
+        # until the reconnection attempt is successful.
+        will_reconnect = True
+        if self.reconnect_mutex.locked():
+            will_reconnect = False
+        with self.reconnect_mutex:
+            if not will_reconnect:
+                return
+            logger.info(f"Waiting for connection on RFCOMM channel {self.port}")
+            self.client_sock, client_info = self.server_sock.accept()
+            logger.info(f"Accepted RFCOMM connection from {client_info}")
+
+    def send(self, message: str) -> None:
+        data = (message + self.MESSAGE_DELIMITER).encode("utf-8")
+        self.message_queue.put(data)
+
+    def _send_worker(self) -> None:
+        while True:
+            data = self.message_queue.get()
+            while True:
+                try:
+                    self.client_sock.send(data)
+                    logger.debug(f"RFCOMM sent raw data {data}")
+                    break
+                except bluetooth.btcommon.BluetoothError as e:
+                    # BluetoothError may not necessarily be disconnection, so
+                    # this is a little bit overkill. But there doesn't seem to
+                    # be a good way to tell what the exact error is.
+                    logger.error(f"Bluetooth disconnected: {e}")
+                    self._reconnect()
+                except OSError as e:
+                    logger.error(f"Failed to send data {data}: {e}")
+
+    def _receive(self) -> None:
+        try:
+            while True:
+                try:
+                    data = self.client_sock.recv(1024)
+                    logger.debug(f"RFCOMM received raw data {data}")
+                    self.receive_buffer += str(data, encoding="utf-8")
+                    while True:
+                        message = self._pop_message_from_buffer()
+                        if message is None:
+                            break
+                        thr = Thread(
+                            target=self.message_callback, args=[message])
+                        thr.start()
+                except bluetooth.btcommon.BluetoothError as e:
+                    # BluetoothError may not necessarily be disconnection, so
+                    # this is a little bit overkill. But there doesn't seem to
+                    # be a good way to tell what the exact error is.
+                    logger.error(f"Bluetooth disconnected: {e}")
+                    self._reconnect()
+        except OSError as e:
+            logger.error(f"Failed to receive data: {e}")
+
+    def _pop_message_from_buffer(self) -> Union[str, None]:
+        delimiter_idx = self.receive_buffer.find(self.MESSAGE_DELIMITER)
+        if delimiter_idx == -1:
+            return None
+        message = self.receive_buffer[:delimiter_idx]
+        self.receive_buffer = self.receive_buffer[delimiter_idx + 1:]
+        return message

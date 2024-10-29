@@ -1,0 +1,8 @@
+# The latest release of picamera (1.13) can only be installed on Raspberry Pi,
+# so we install it from the master branch on non-Raspberry Pi systems.
+picamera==1.13; sys_platform=="linux" and platform_machine=="armv7l"
+picamera @ https://github.com/waveform80/picamera/archive/7e4f1d379d698c44501fb84b886fadf3fc164b70.tar.gz; sys_platform!="linux" or platform_machine!="armv7l"
+# pybluez is used on Raspberry Pi, but it fails to build on some other systems.
+pybluez==0.22; sys_platform=="linux" and platform_machine=="armv7l"
+pybluez2==0.46; sys_platform=="linux" and platform_machine!="armv7l"
+pybluez2 @ https://github.com/airgproducts/pybluez2/archive/refs/tags/0.46.tar.gz; sys_platform!="linux"

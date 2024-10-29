@@ -1,0 +1,4 @@
+from os import getenv
+
+DEFAULT_HTTP_SERVER = "localhost:8080"
+http_server = getenv("IMAGE_HTTP_SERVER", DEFAULT_HTTP_SERVER)

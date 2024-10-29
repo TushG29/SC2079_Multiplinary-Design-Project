@@ -1,0 +1,22 @@
+from os.path import dirname
+
+from loguru import logger
+
+logger.info("Initialising image detection module")
+
+logger.info("Loading ultralytics")
+from ultralytics import YOLO  # noqa: E402
+
+logger.info("Loading model")
+# To convert `best.pt` to `best.onnx`, run:
+#   yolo export model=best.pt format=onnx
+try:
+    model = YOLO(f"{dirname(__file__)}/models/best.onnx")
+    # Pre-load onnxruntime to save time.
+    logger.info("Using ONNX model; loading onnxruntime")
+    import onnxruntime  # noqa: F401
+except FileNotFoundError:
+    model = YOLO(f"{dirname(__file__)}/models/best.pt")
+    logger.info("Using PyTorch model")
+
+logger.info("Finished initialising image detection module")

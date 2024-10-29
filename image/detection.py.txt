@@ -1,0 +1,45 @@
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class Detection:
+    index: int
+    name: str
+    id: Optional[int]
+    confidence: float
+    distance_from_center: float
+
+    def __repr__(self) -> str:
+        id = self.id if self.id is not None else "dunno"
+        return f"[{id}] {self.name} ({self.confidence:.4f})"
+
+    def to_dict(self) -> str:
+        return {
+            "index": self.index,
+            "name": self.name,
+            "id": self.id,
+            "confidence": self.confidence,
+            "distance_from_center": self.distance_from_center,
+        }
+
+    @staticmethod
+    def from_dict(dict: Dict[str, Any]) -> "Detection":
+        return Detection(
+            index=dict["index"],
+            name=dict["name"],
+            id=dict["id"],
+            confidence=dict["confidence"],
+            distance_from_center=dict["distance_from_center"],
+        )
+
+
+def get_best_detection(
+        detections: List[Detection],
+        allowed_names: Optional[List[str]] = None) -> Optional[Detection]:
+    if allowed_names is not None:
+        detections = [d for d in detections if d.name in allowed_names]
+    if len(detections) == 0:
+        return None
+    best = sorted(detections, key=lambda d: d.distance_from_center)[0]
+    return best

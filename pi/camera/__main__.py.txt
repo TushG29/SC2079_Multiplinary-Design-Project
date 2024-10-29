@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+
+from pi.camera.detect import detect as camera_detect
+
+if __name__ == "__main__":
+    i = 0
+    while True:
+        input("Press Enter to continue... ")
+        camera_detect(str(i))
+        i += 1

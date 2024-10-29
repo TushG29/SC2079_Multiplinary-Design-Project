@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+from http.server import ThreadingHTTPServer
+
+from loguru import logger
+
+import image.server
+from image.server.handler import ImageRecognitionHTTPRequestHandler
+
+
+def run(port) -> None:
+    server_address = ("", port)
+    httpd = ThreadingHTTPServer(server_address,
+                                ImageRecognitionHTTPRequestHandler)
+    logger.info("Starting HTTP server")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    logger.info("Stopping HTTP server")
+    httpd.server_close()
+
+
+def main() -> None:
+    import sys
+
+    if len(sys.argv) > 2:
+        print(f"Usage: python3 {sys.argv[0]} <port>", file=sys.stderr)
+        sys.exit(1)
+
+    if len(sys.argv) == 2:
+        run(port=int(sys.argv[1]))
+    else:
+        run(image.server.http_server_port)
+
+
+if __name__ == "__main__":
+    main()

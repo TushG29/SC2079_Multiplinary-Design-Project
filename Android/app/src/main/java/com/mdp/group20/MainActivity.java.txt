@@ -1,0 +1,1340 @@
+package com.mdp.group20;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.gridlayout.widget.GridLayout;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.viewpager.widget.ViewPager;
+
+import android.annotation.SuppressLint;
+import android.app.ProgressDialog;
+import android.bluetooth.BluetoothDevice;
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.graphics.Typeface;
+import android.os.Bundle;
+import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.DragEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.google.android.material.tabs.TabLayout;
+import com.mdp.group20.adapter.SectionsPagerAdapter;
+import com.mdp.group20.bluetooth.BluetoothActivity;
+import com.mdp.group20.bluetooth.BluetoothService;
+import com.mdp.group20.map.Constants;
+import com.mdp.group20.map.Map;
+import com.mdp.group20.modal.Robot;
+import com.mdp.group20.pagefragment.ControlTabFragment;
+import com.mdp.group20.pagefragment.DebugTabFragment;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class MainActivity extends AppCompatActivity {
+    static MainActivity mainActivitInstance;
+    static TextView xAxisTextView, yAxisTextView, directionAxisTextView;
+    static TextView robotStatusTextView, toolbarConnStatusTextView;
+    ProgressDialog myDialog;
+    String notiMessage = "";
+    String preNotiMessage = "";
+    GridLayout obstacleDirectionSelect;
+    GridLayout carDirectionSelect;
+    static String carPosition = "";
+    float pastX, pastY;
+    public static Robot myRobot;
+    int plottedObstacleNo = 0;
+    private static SharedPreferences sharedPreferences;
+    private static SharedPreferences.Editor editor;
+    private static final String TAG = "Main Activity";
+    private static Context context;
+    BluetoothService mBluetoothConnection;
+    public static Map map;
+    private static int mapLeft;
+    private static int mapTop;
+    private static ConstraintLayout obstacle1Grp;
+    private static ConstraintLayout obstacle2Grp;
+    private static ConstraintLayout obstacle3Grp;
+    private static ConstraintLayout obstacle4Grp;
+    private static ConstraintLayout obstacle5Grp;
+    private static ConstraintLayout obstacle6Grp;
+    private static ConstraintLayout obstacle7Grp;
+    private static ConstraintLayout obstacle8Grp;
+    private static int[][] originalObstacleCoords = new int[8][2];
+    private static int[][] currentObstacleCoords = new int[8][2]; // remember to expand this
+
+    private static int[] originalCarCoords = new int[2];
+    private static int[] currentCarCoords = new int[2];
+    private static String instruction = "Robot, 4, 10, S";
+    private static ConstraintLayout robotGrp;
+    private static int rotation = 0;
+
+    public static List<ConstraintLayout> obstacleViews = new ArrayList<>();
+    private List<ImageView> obstacleFaceViews = new ArrayList<>();
+    private static List<TextView> obstacleTextViews = new ArrayList<>();
+    private List<ImageView> obstacleBoxViews = new ArrayList<>();
+
+    public static void sharedPreferences() {
+        sharedPreferences = MainActivity.getSharedPreferences(MainActivity.context);
+        editor = sharedPreferences.edit();
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        mainActivitInstance = this;
+
+        SectionsPagerAdapter sectionsPagerAdapter = new SectionsPagerAdapter(this, getSupportFragmentManager());
+        ViewPager viewPager = findViewById(R.id.view_pager);
+        viewPager.setAdapter(sectionsPagerAdapter);
+        viewPager.setOffscreenPageLimit(9999);
+        TabLayout tabs = findViewById(R.id.tabs);
+        tabs.setupWithViewPager(viewPager);
+        LocalBroadcastManager.getInstance(this).registerReceiver(messageReceiver, new IntentFilter("incomingMessage"));
+
+        //Set up sharedPreferences
+        MainActivity.context = getApplicationContext();
+        this.sharedPreferences();
+        editor.putString("message", "");
+        editor.putString("direction", "None");
+        editor.putString("connStatus", "Disconnected");
+        editor.commit();
+
+        // Toolbar area
+        Button bluetoothButton = findViewById(R.id.bluetoothButton);
+        bluetoothButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent popup = new Intent(MainActivity.this, BluetoothActivity.class);
+                startActivity(popup);
+            }
+        });
+
+        xAxisTextView = findViewById(R.id.xAxisTextView);
+        yAxisTextView = findViewById(R.id.yAxisTextView);
+        directionAxisTextView = findViewById(R.id.directionAxisTextView);
+
+        toolbarConnStatusTextView = findViewById(R.id.toolbarConnStatusTextView);
+
+        obstacleDirectionSelect = (GridLayout) findViewById(R.id.obstacleDirectionSelect);
+        carDirectionSelect = (GridLayout) findViewById(R.id.carDirectionSelect);
+
+        // robot car
+        robotGrp = (ConstraintLayout) findViewById(R.id.robotcarGrp);
+        robotStatusTextView = findViewById(R.id.robotStatusTextView);
+
+        myDialog = new ProgressDialog(MainActivity.this);
+        myDialog.setMessage("Waiting for other device to reconnect");
+        myDialog.setCancelable(false);
+        myDialog.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.dismiss();
+            }
+        });
+
+        initMap();
+        //TEST INSTRUCTION
+        if (!Constants.instruction.equals("null")) {
+            System.out.println("AT VIEW CREATE");
+            System.out.println(Constants.instruction);
+            executeInstruction();
+        }
+
+        map.initObstaclesData();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try {
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(messageReceiver);
+            LocalBroadcastManager.getInstance(this).unregisterReceiver(mBroadcastReceiver5);
+        } catch (IllegalArgumentException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static TextView getRobotStatusTextView() {
+        return robotStatusTextView;
+    }
+
+    public static void refreshLabel() {
+//        xAxisTextView.setText(String.valueOf(gridMap.getCurCoord()[0]-1));
+//        yAxisTextView.setText(String.valueOf(gridMap.getCurCoord()[1]-1));
+        directionAxisTextView.setText(sharedPreferences.getString("direction", ""));
+    }
+
+    public void refreshDirection(String direction) {
+//        gridMap.setRobotDirection(direction);
+        directionAxisTextView.setText(sharedPreferences.getString("direction", ""));
+        printMessage("Direction is set to " + direction);
+    }
+
+    /**
+     * Responding to instructions from external RPI
+     */
+    public void executeInstruction() {
+
+        if (!Constants.instruction.equals("null")) {
+            instruction = Constants.instruction;
+        }
+        String formattedInstruction = instruction.replaceAll("\\s", "");
+        List<String> instructionList = Arrays.asList(formattedInstruction.split(","));
+
+        System.out.println(formattedInstruction);
+        System.out.println(instructionList.get(0));
+        //CLEANING
+        String prefix = instructionList.get(0);
+        prefix = prefix.toUpperCase();
+
+        //FOR STATUS
+        if (prefix.equals("STATUS")) {
+            // assuming max 1 comma
+            String display = "STATUS: ";
+            display = display + instructionList.get(1);
+            printMessage(display);
+        } else if (prefix.equals("TARGET")) {
+            // need to add check?
+            int targetObst = Integer.parseInt(instructionList.get(1));
+            String targetID = instructionList.get(2);
+            TextView target = obstacleTextViews.get(targetObst - 1);
+            target.setText(targetID);
+            target.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+
+        } else if (prefix.equals("ROBOT")) {
+            //SET A MAX AND MIN!!! -- 8 feb
+            int col = Integer.parseInt(instructionList.get(1));
+            int row = Integer.parseInt(instructionList.get(2));
+
+            if (col < 1) {
+                col = Math.max(col, 1);
+            } else {
+                col = Math.min(col, map.getCol() - 2);
+            }
+            if (row < 1) {
+                row = Math.max(row, 1);
+            } else {
+                row = Math.min(row, map.getCol() - 2);
+            }
+            String face = instructionList.get(3);
+            robotGrp.setVisibility(View.VISIBLE);
+
+            map.setOldRobotCoord(map.getCurCoord()[0], map.getCurCoord()[1]); // create tracks
+            int[] newCoord = new int[]{col, row};
+            map.setCurCoord(newCoord);
+
+            rotation = map.convertFacingToRotation(face);
+            map.saveFacingWithRotation(rotation);
+            trackRobot();
+            map.invalidate();
+        } else {
+            System.out.println(instruction);
+            String errorMsg = "Error: " + instruction;
+            printMessage(errorMsg);
+            System.out.println("DOESNT WORK");
+        }
+    }
+
+    public static void sendBTMessage(String message) {
+        if (BluetoothService.BluetoothConnectionStatus == true) {
+            byte[] bytes = message.getBytes(Charset.defaultCharset());
+            BluetoothService.write(bytes);
+        }
+        printMessage(message);
+    }
+
+    public static void printMessage(String message) {
+        showLog("Entering printMessage");
+        editor = sharedPreferences.edit();
+
+        showLog(message);
+        editor.putString("message", DebugTabFragment.getMessageReceivedTextView().getText() + "\n" + message);
+        editor.commit();
+        refreshMessageReceived();
+        showLog("Exiting printMessage");
+    }
+
+    public static void printMessage(String name, int x, int y) throws JSONException {
+        showLog("Entering printMessage");
+        sharedPreferences();
+
+        JSONObject jsonObject = new JSONObject();
+        String message;
+
+        switch (name) {
+//            case "starting":
+            case "waypoint":
+                jsonObject.put(name, name);
+                jsonObject.put("x", x);
+                jsonObject.put("y", y);
+                message = name + " (" + x + "," + y + ")";
+                break;
+            default:
+                message = "Unexpected default for printMessage: " + name;
+                break;
+        }
+        editor.putString("message", DebugTabFragment.getMessageReceivedTextView().getText() + "\n" + message);
+        editor.commit();
+        if (BluetoothService.BluetoothConnectionStatus == true) {
+            byte[] bytes = message.getBytes(Charset.defaultCharset());
+            BluetoothService.write(bytes);
+        }
+        showLog("Exiting printMessage");
+    }
+
+    public static void receiveMessage(String message) {
+        showLog("Entering receiveMessage");
+        sharedPreferences();
+        editor.putString("message", sharedPreferences.getString("message", "") + "\n" + message);
+        editor.commit();
+        showLog("Exiting receiveMessage");
+    }
+
+    public static void refreshMessageReceived() {
+        TextView mTextView = DebugTabFragment.getMessageReceivedTextView();
+        mTextView.setMovementMethod(new ScrollingMovementMethod());
+        mTextView.setText(sharedPreferences.getString("message", ""));
+        final int scrollAmount = mTextView.getLayout().getLineTop(mTextView.getLineCount()) - mTextView.getHeight();
+        showLog("HEY!!! " + scrollAmount);
+        if (scrollAmount > 0)
+            mTextView.scrollTo(0, scrollAmount);
+        else
+            mTextView.scrollTo(0, 0);
+    }
+
+    /**
+     * FUNCTIONS TO HELP CHECKING OBSTACLE
+     */
+    public void printAllObstacleCoords() {
+        System.out.println("Obstacle Coords");
+        for (int i = 0; i < currentObstacleCoords.length; i++) {
+            System.out.printf("Obstacle %d |  X: %d, Y: %d\n", i + 1, currentObstacleCoords[i][0], currentObstacleCoords[i][1]);
+        }
+    }
+
+    public void printOriginalObstacleCoords() {
+        System.out.println("OG obstacle Coords");
+        for (int i = 0; i < originalObstacleCoords.length; i++) {
+            System.out.printf("Obstacle %d |  X: %d, Y: %d\n", i + 1, originalObstacleCoords[i][0], originalObstacleCoords[i][1]);
+        }
+    }
+
+    public void printAllObstacleLeftTop() {
+        System.out.println("Obstacle Left Top");
+        for (int i = 0; i < obstacleViews.size(); i++) {
+            //System.out.println(i+1);
+            System.out.printf("Obstacle %d |  Left: %d, Top: %d\n", i + 1, obstacleViews.get(i).getLeft(), obstacleViews.get(i).getTop());
+        }
+    }
+
+    public static MainActivity getInstance() {
+        return mainActivitInstance;
+    }
+
+    public void updateRobotInfo(int col, int row, String direction) {
+        if (myRobot == null) {
+            int newRow = row - 1;
+            int newCol = col + 1;
+            myRobot = new Robot(newRow, newCol, direction);
+        } else {
+            int newRow = row - 1;
+            int newCol = col + 1;
+            myRobot.setCol(newCol);
+            myRobot.setRow(newRow);
+            myRobot.setDirection(direction);
+        }
+    }
+
+    public static void resetObsText(){
+        for (int i = 0; i < obstacleTextViews.size(); i++) {
+            obstacleTextViews.get(i).setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
+            obstacleTextViews.get(i).setText(String.valueOf(i+1));
+        }
+    }
+    public void reset(boolean print) {
+        for (int i = 0; i < obstacleViews.size(); i++) {
+            obstacleViews.get(i).setX(originalObstacleCoords[i][0]);
+            obstacleViews.get(i).setY(originalObstacleCoords[i][1]);
+        }
+
+        for (int i = 0; i < obstacleTextViews.size(); i++) {
+            obstacleTextViews.get(i).setTextSize(TypedValue.COMPLEX_UNIT_SP, 8);
+            obstacleTextViews.get(i).setText(String.valueOf(i+1));
+        }
+
+//        Toast.makeText(MainActivity.context, String.valueOf(robotGrp.getRotation()), Toast.LENGTH_SHORT).show();
+
+        robotGrp.setX(originalCarCoords[0]);
+        robotGrp.setY(originalCarCoords[1]);
+
+        // make the face side disappear.
+        for (int i = 0; i < obstacleFaceViews.size(); i++) {
+            //obstacleFaceViews.get(i).setRotation(0);
+            obstacleFaceViews.get(i).setVisibility(View.INVISIBLE);
+        }
+        // reset list of current obstacles
+        for (int i = 0; i < currentObstacleCoords.length; i++) {
+            currentObstacleCoords[i][0] = 0;
+            currentObstacleCoords[i][1] = 0;
+        }
+
+        currentCarCoords[0] = 0;
+        currentCarCoords[1] = 0;
+
+        if (print) {
+            printMessage("Obstacles Reset");
+        }
+
+        obstacleDirectionSelect.setVisibility(View.GONE);
+        carDirectionSelect.setVisibility(View.GONE);
+        map.removeAllObstacles();
+
+        map.reset();   //remove all cells.
+        map.invalidate();
+        map.initObstaclesData();
+
+        View robot = ((ViewGroup) robotGrp).getChildAt(0);
+        robot.setRotation(0);
+
+        plottedObstacleNo = 0;
+
+    }
+    public static void setToolbarConnStatusTextView(String connStatus) {
+        toolbarConnStatusTextView.setText(connStatus);
+    }
+    public static void sendObstacleInfo(String messageToRpi) {
+        sendBTMessage(messageToRpi);
+    }
+
+    public static void sendCarInfo(){
+        sendBTMessage(carPosition);
+    }
+
+    public static void sendStopSignal(){
+        sendBTMessage("stop");
+    }
+    private void constructCarInfo(int col, int row, String direction) {
+        carPosition = String.format("startPoint %d,%d,%s", col + 1, row - 1, direction);
+    }
+
+    public static void sendModeInfo(String mode) {
+        String messageToRpi = mode;
+        sendBTMessage(messageToRpi);
+//        printMessage(messageToRpi);
+    }
+
+    private String checkDirection(ConstraintLayout curObjectGrp, boolean isObstacle) {
+        String direction = "";
+        View selectedObject;
+        if (isObstacle) {
+            selectedObject = ((ViewGroup) curObjectGrp).getChildAt(1);
+        } else {
+            selectedObject = ((ViewGroup) curObjectGrp).getChildAt(0);
+        }
+
+        float rotation = selectedObject.getRotation();
+
+        switch ((int) rotation) {
+            case 0:
+                direction = Constants.NORTH;
+                break;
+            case 90:
+                direction = Constants.EAST;
+                break;
+            case 180:
+                direction = Constants.SOUTH;
+                break;
+            case 270:
+                direction = Constants.WEST;
+                break;
+        }
+
+        return direction;
+    }
+
+    private void changeDirection(ConstraintLayout curObjectGrp, String direction, boolean isObstacle) {
+        View selectedObject;
+        if (isObstacle) {
+            selectedObject = ((ViewGroup) curObjectGrp).getChildAt(1);
+        } else {
+            selectedObject = ((ViewGroup) curObjectGrp).getChildAt(0);
+        }
+        switch (direction) {
+            case Constants.NORTH:
+                selectedObject.setVisibility(View.VISIBLE);
+                selectedObject.setRotation(0);
+                break;
+            case Constants.EAST:
+                selectedObject.setVisibility(View.VISIBLE);
+                selectedObject.setRotation(90);
+                break;
+            case Constants.SOUTH:
+                selectedObject.setVisibility(View.VISIBLE);
+                selectedObject.setRotation(180);
+                break;
+            case Constants.WEST:
+                selectedObject.setVisibility(View.VISIBLE);
+                selectedObject.setRotation(270);
+                break;
+        }
+    }
+
+    private void initMap() {
+        map = findViewById(R.id.mapView);
+        for (int i = 0; i < originalObstacleCoords.length; i++) {
+            for (int j = 0; j < originalObstacleCoords[i].length; j++) {
+                originalObstacleCoords[i][j] = -1;
+            }
+        }
+
+        originalCarCoords[0] = -1;
+        originalCarCoords[1] = -1;
+
+        obstacle1Grp = (ConstraintLayout) findViewById(R.id.obstacle1Group);
+        ImageView obstacle1Box = (ImageView) findViewById(R.id.obstacle1Box);
+
+        ImageView obstacle1Face = (ImageView) findViewById(R.id.obstacle1Face);
+        TextView obstacle1Id = (TextView) findViewById(R.id.obstacle1ID);
+
+        obstacle2Grp = (ConstraintLayout) findViewById(R.id.obstacle2Group);
+        ImageView obstacle2Box = (ImageView) findViewById(R.id.obstacle2Box);
+        ;
+        ImageView obstacle2Face = (ImageView) findViewById(R.id.obstacle2Face);
+        TextView obstacle2Id = (TextView) findViewById(R.id.obstacle2ID);
+
+        obstacle3Grp = (ConstraintLayout) findViewById(R.id.obstacle3Group);
+        ImageView obstacle3Box = (ImageView) findViewById(R.id.obstacle3Box);
+        ;
+        ImageView obstacle3Face = (ImageView) findViewById(R.id.obstacle3Face);
+        TextView obstacle3Id = (TextView) findViewById(R.id.obstacle3ID);
+
+        obstacle4Grp = (ConstraintLayout) findViewById(R.id.obstacle4Group);
+        ImageView obstacle4Box = (ImageView) findViewById(R.id.obstacle4Box);
+        ;
+        ImageView obstacle4Face = (ImageView) findViewById(R.id.obstacle4Face);
+        TextView obstacle4Id = (TextView) findViewById(R.id.obstacle4ID);
+
+        obstacle5Grp = (ConstraintLayout) findViewById(R.id.obstacle5Group);
+        ImageView obstacle5Box = (ImageView) findViewById(R.id.obstacle5Box);
+        ;
+        ImageView obstacle5Face = (ImageView) findViewById(R.id.obstacle5Face);
+        TextView obstacle5Id = (TextView) findViewById(R.id.obstacle5ID);
+
+        obstacle6Grp = (ConstraintLayout) findViewById(R.id.obstacle6Group);
+        ImageView obstacle6Box = (ImageView) findViewById(R.id.obstacle6Box);
+        ;
+        ImageView obstacle6Face = (ImageView) findViewById(R.id.obstacle6Face);
+        TextView obstacle6Id = (TextView) findViewById(R.id.obstacle6ID);
+
+        obstacle7Grp = (ConstraintLayout) findViewById(R.id.obstacle7Group);
+        ImageView obstacle7Box = (ImageView) findViewById(R.id.obstacle7Box);
+        ;
+        ImageView obstacle7Face = (ImageView) findViewById(R.id.obstacle7Face);
+        TextView obstacle7Id = (TextView) findViewById(R.id.obstacle7ID);
+
+        obstacle8Grp = (ConstraintLayout) findViewById(R.id.obstacle8Group);
+        ImageView obstacle8Box = (ImageView) findViewById(R.id.obstacle8Box);
+        ;
+        ImageView obstacle8Face = (ImageView) findViewById(R.id.obstacle8Face);
+        TextView obstacle8Id = (TextView) findViewById(R.id.obstacle8ID);
+
+        obstacleViews.add(obstacle1Grp);
+        obstacleViews.add(obstacle2Grp);
+        obstacleViews.add(obstacle3Grp);
+        obstacleViews.add(obstacle4Grp);
+        obstacleViews.add(obstacle5Grp);
+        obstacleViews.add(obstacle6Grp);
+        obstacleViews.add(obstacle7Grp);
+        obstacleViews.add(obstacle8Grp);
+
+        obstacleFaceViews.add(obstacle1Face);
+        obstacleFaceViews.add(obstacle2Face);
+        obstacleFaceViews.add(obstacle3Face);
+        obstacleFaceViews.add(obstacle4Face);
+        obstacleFaceViews.add(obstacle5Face);
+        obstacleFaceViews.add(obstacle6Face);
+        obstacleFaceViews.add(obstacle7Face);
+        obstacleFaceViews.add(obstacle8Face);
+
+        obstacleTextViews.add(obstacle1Id);
+        obstacleTextViews.add(obstacle2Id);
+        obstacleTextViews.add(obstacle3Id);
+        obstacleTextViews.add(obstacle4Id);
+        obstacleTextViews.add(obstacle5Id);
+        obstacleTextViews.add(obstacle6Id);
+        obstacleTextViews.add(obstacle7Id);
+        obstacleTextViews.add(obstacle8Id);
+
+        obstacleBoxViews.add(obstacle1Box);
+        obstacleBoxViews.add(obstacle2Box);
+        obstacleBoxViews.add(obstacle3Box);
+        obstacleBoxViews.add(obstacle4Box);
+        obstacleBoxViews.add(obstacle5Box);
+        obstacleBoxViews.add(obstacle6Box);
+        obstacleBoxViews.add(obstacle7Box);
+        obstacleBoxViews.add(obstacle8Box);
+
+        //set face views invisible
+        for (int i = 0; i < obstacleFaceViews.size(); i++) {
+            obstacleFaceViews.get(i).setVisibility(View.INVISIBLE);
+        }
+
+        obstacle1Grp.post(new Runnable() {
+            @Override
+            public void run() {
+                System.out.println("current coordinates");
+//                printAllObstacleCoords();
+//                printAllObstacleLeftTop();
+
+                //SET THE SIZES CORRECTLY JIC - RMB ITS THE BOX NOT THE WHOLE CONSTRAINT
+
+                for (int i = 0; i < obstacleBoxViews.size(); i++) {
+                    obstacleBoxViews.get(i).getLayoutParams().height = (int) map.getCellSize();
+                    obstacleBoxViews.get(i).getLayoutParams().width = (int) map.getCellSize();
+                    obstacleBoxViews.get(i).requestLayout();
+                }
+
+                for (int i = 0; i < obstacleFaceViews.size(); i++) {
+                    obstacleFaceViews.get(i).getLayoutParams().height = (int) map.getCellSize();
+                    obstacleFaceViews.get(i).getLayoutParams().width = (int) map.getCellSize();
+                    obstacleFaceViews.get(i).requestLayout();
+                }
+
+                robotGrp.getLayoutParams().height = (int) map.getCellSize() * 3;
+                robotGrp.getLayoutParams().width = (int) map.getCellSize() * 3;
+                robotGrp.requestLayout();
+
+                //reverse
+//                reverseSwitch.setChecked(false);  // default = false: not reverse
+
+                //MAP coordinates - for saving
+                mapLeft = map.getLeft();
+                mapTop = map.getTop();
+
+                // save original coords of obstacles
+                for (int i = 0; i < obstacleViews.size(); i++) {
+                    originalObstacleCoords[i][0] = (int) obstacleViews.get(i).getLeft();
+                    originalObstacleCoords[i][1] = (int) obstacleViews.get(i).getTop();
+                }
+                originalCarCoords[0] = robotGrp.getLeft();
+                originalCarCoords[1] = robotGrp.getTop();
+
+//                printOriginalObstacleCoords();
+                reset(false);
+            }
+        });
+
+        View.OnTouchListener onTouchListener = new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent motionEvent) {
+                if (motionEvent.getAction() == MotionEvent.ACTION_DOWN) {
+                    ClipData data = ClipData.newPlainText("", "");
+                    View.DragShadowBuilder shadowBuilder = new View.DragShadowBuilder(view);
+                    view.startDrag(data, shadowBuilder, view, 0);
+
+                    int id = view.getId();
+                    if (id == R.id.obstacle1Group) {
+                        pastX = obstacle1Grp.getX();
+                        pastY = obstacle1Grp.getY();
+                    } else if (id == R.id.obstacle2Group) {
+                        pastX = obstacle2Grp.getX();
+                        pastY = obstacle2Grp.getY();
+                    } else if (id == R.id.obstacle3Group) {
+                        pastX = obstacle3Grp.getX();
+                        pastY = obstacle3Grp.getY();
+                    } else if (id == R.id.obstacle4Group) {
+                        pastX = obstacle4Grp.getX();
+                        pastY = obstacle4Grp.getY();
+                    } else if (id == R.id.obstacle5Group) {
+                        pastX = obstacle5Grp.getX();
+                        pastY = obstacle5Grp.getY();
+                    } else if (id == R.id.obstacle6Group) {
+                        pastX = obstacle6Grp.getX();
+                        pastY = obstacle6Grp.getY();
+                    } else if (id == R.id.obstacle7Group) {
+                        pastX = obstacle7Grp.getX();
+                        pastY = obstacle7Grp.getY();
+                    } else if (id == R.id.obstacle8Group) {
+                        pastX = obstacle8Grp.getX();
+                        pastY = obstacle8Grp.getY();
+                    } else if (id == R.id.robotcar) {
+                        pastX = robotGrp.getX();
+                        pastY = robotGrp.getY();
+                    }
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+        };
+
+
+        obstacle1Grp.setOnTouchListener(onTouchListener);
+        obstacle2Grp.setOnTouchListener(onTouchListener);
+        obstacle3Grp.setOnTouchListener(onTouchListener);
+        obstacle4Grp.setOnTouchListener(onTouchListener);
+        obstacle5Grp.setOnTouchListener(onTouchListener);
+        obstacle6Grp.setOnTouchListener(onTouchListener);
+        obstacle7Grp.setOnTouchListener(onTouchListener);
+        obstacle8Grp.setOnTouchListener(onTouchListener);
+        robotGrp.setOnTouchListener(onTouchListener);
+
+        /** handle drag and drop obstacle to map
+         *
+         */
+        map.setOnDragListener(new View.OnDragListener() {
+            @Override
+            public boolean onDrag(View view, DragEvent dragEvent) {
+
+                int action = dragEvent.getAction();
+                switch (action) {
+                    case DragEvent.ACTION_DRAG_STARTED:
+                        // Do nothing
+                        break;
+                    case DragEvent.ACTION_DRAG_ENTERED:
+                        // Highlight the cell on the chess board where the piece is being dragged over
+                        break;
+                    case DragEvent.ACTION_DRAG_EXITED:
+                        // Remove the highlight from the cell
+                        break;
+                    case DragEvent.ACTION_DROP:
+                        // when dropped into the grid
+                        ConstraintLayout curSelectedGrp = (ConstraintLayout) dragEvent.getLocalState();
+                        Log.d(TAG, "curSelectedGrp:" + curSelectedGrp.toString());
+
+                        String itemIdString = getResources().getResourceEntryName(curSelectedGrp.getId());
+
+                        int x = (int) dragEvent.getX();
+                        int y = (int) dragEvent.getY();
+
+                        if (itemIdString.indexOf("obstacle") >= 0) {
+                            // handle obstacles
+
+                            if (map.getCellType(x, y).equals("robot")) {
+                                Toast.makeText(MainActivity.this, "An obstacle cannot be placed on the robot.", Toast.LENGTH_SHORT).show();
+                                return true;
+                            }
+
+                            // if the past location of obstacle was in the map, remove the old one.
+                            if (pastX >= map.getX() && pastX <= map.getX() + map.getWidth() && pastY >= map.getY() && pastY <= map.getY() + map.getHeight()) {
+                                map.removeObstacleUsingCoord(pastX - map.getX() + map.getCellSize() / 2, pastY - map.getY() + map.getCellSize() / 2);
+                            }
+
+                            // if the obstacle alr been marked as obstacle, replace the old obstacle and move it back to its original position
+                            if (map.getCellType(x, y).equals("obstacle")) {
+                                plottedObstacleNo--;
+                                int resID = getResources().getIdentifier(map.getObstacleId(x, y), "id", getPackageName());
+                                ConstraintLayout preObstacleGrp = (ConstraintLayout) findViewById(resID);
+                                for (int i = 0; i < obstacleViews.size(); i++) {
+                                    if (preObstacleGrp == obstacleViews.get(i)) {
+                                        map.removeObstacleUsingCoord(obstacleViews.get(i).getX() - map.getX() + map.getCellSize() / 2, obstacleViews.get(i).getY() - map.getY() + map.getCellSize() / 2);
+                                        preObstacleGrp.setX(originalObstacleCoords[i][0]);
+                                        preObstacleGrp.setY(originalObstacleCoords[i][1]);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // to add the new obstacle black square - returns the coordinates, col and row --> (x, y, col, row)
+                            int[] newObstCoordColRow = map.updateObstacleOnBoard(x, y, getResources().getResourceEntryName(curSelectedGrp.getId()));
+
+                            //print message
+                            System.out.println("Notification values:");
+                            int obstacleNum = getObstacleNumber(curSelectedGrp);
+                            int col = newObstCoordColRow[2];
+                            int row = newObstCoordColRow[3];
+                            notiMessage = String.format("Obstacle: %d, Col: %d, Row: %d", obstacleNum, col, row);
+
+                            //others
+                            int[] newObstacleCoord = {newObstCoordColRow[0], newObstCoordColRow[1]};
+                            newObstacleCoord[0] = newObstacleCoord[0] + (int) (map.getX());
+                            newObstacleCoord[1] = newObstacleCoord[1] + (int) (map.getY());
+
+                            int[] newDirectionCoord = map.updateDirectionSelection(newObstCoordColRow[0], newObstCoordColRow[1]);
+                            int directionSelectX = (newDirectionCoord[0]) + (int) (map.getX());
+                            int directionSelecty = (newDirectionCoord[1]) + (int) (map.getY());
+
+                            //saving the current obstacles
+                            currentObstacleCoords[obstacleNum - 1] = newObstacleCoord;
+
+                            plottedObstacleNo++;
+
+                            // MUST get from the map class to snap to grid - for the new image
+                            curSelectedGrp.setX(newObstacleCoord[0]);
+                            curSelectedGrp.setY(newObstacleCoord[1]);
+//                            printAllObstacleCoords();
+
+
+                            if (!preNotiMessage.equals(notiMessage)) {
+                                // its a drag
+                                System.out.printf(notiMessage);
+                                System.out.println();
+//                            printMessage(notiMessage);
+                                obstacleDirectionSelect.setX(directionSelectX);
+                                obstacleDirectionSelect.setY(directionSelecty);
+                                obstacleDirectionSelect.setVisibility(View.VISIBLE);
+
+                                View selectedFace = ((ViewGroup) curSelectedGrp).getChildAt(1);
+                                if (selectedFace.getVisibility() == View.VISIBLE) {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, checkDirection(curSelectedGrp, true));
+                                } else {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, "");
+                                }
+                            } else {
+                                // click only not drag - show/hide obstacle direction gridlayout
+                                if (obstacleDirectionSelect.getVisibility() == View.VISIBLE) {
+                                    obstacleDirectionSelect.setVisibility(View.GONE);
+                                } else {
+                                    obstacleDirectionSelect.setX(directionSelectX);
+                                    obstacleDirectionSelect.setY(directionSelecty);
+                                    obstacleDirectionSelect.setVisibility(View.VISIBLE);
+                                }
+                            }
+
+                            preNotiMessage = notiMessage;
+
+                            //SEND obstacle no., coordinates, and direction to RPI when direction selected
+                            ImageButton upBtn = (ImageButton) findViewById(R.id.directionUpBtn);
+                            upBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, Constants.NORTH);
+                                    obstacleDirectionSelect.setVisibility(View.GONE);
+                                    changeDirection(curSelectedGrp, Constants.NORTH, true);
+                                }
+                            });
+
+                            ImageButton leftBtn = (ImageButton) findViewById(R.id.directionLeftBtn);
+                            leftBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, Constants.WEST);
+                                    obstacleDirectionSelect.setVisibility(View.GONE);
+                                    changeDirection(curSelectedGrp, Constants.WEST, true);
+                                }
+                            });
+
+                            ImageButton rightBtn = (ImageButton) findViewById(R.id.directionRightBtn);
+                            rightBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, Constants.EAST);
+                                    obstacleDirectionSelect.setVisibility(View.GONE);
+                                    changeDirection(curSelectedGrp, Constants.EAST, true);
+                                }
+                            });
+
+                            ImageButton downBtn = (ImageButton) findViewById(R.id.directionDownBtn);
+                            downBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    map.updateObstaclesData(obstacleNum - 1, col, row, Constants.SOUTH);
+                                    obstacleDirectionSelect.setVisibility(View.GONE);
+                                    changeDirection(curSelectedGrp, Constants.SOUTH, true);
+                                }
+                            });
+
+                            map.invalidate();
+                            
+                        } else if (itemIdString.indexOf("robotcar") >= 0) {
+                            //handle robotcar
+
+                            int[] newCarCoordColRow = map.updateCarOnBard(x, y);
+                            int[] newRobotCoord = {newCarCoordColRow[0], newCarCoordColRow[1]};
+                            newRobotCoord[0] = newRobotCoord[0] + (int) (map.getX());
+                            newRobotCoord[1] = newRobotCoord[1] + (int) (map.getY());
+
+                            int[] newRobotDirCoord = {newCarCoordColRow[0], newCarCoordColRow[1]};
+                            int col = newCarCoordColRow[2];
+                            int row = newCarCoordColRow[3];
+
+                            if (map.isCellOccupiedByObstacle(col + 1, map.convertRow(row) - 1)) {
+                                Toast.makeText(MainActivity.this, "The robot cannot be placed on an obstacle", Toast.LENGTH_SHORT).show();
+                                return true;
+                            }
+
+                            map.removeCarCells();
+
+                            map.setCellRobot(col + 2, 20 - row);
+
+                            curSelectedGrp.setX(newRobotCoord[0]);
+                            curSelectedGrp.setY(newRobotCoord[1]);
+
+                            // click only
+                            if (currentCarCoords[0] == newRobotDirCoord[0] && currentCarCoords[1] == newRobotDirCoord[1]) {
+                                if (carDirectionSelect.getVisibility() == View.VISIBLE) {
+                                    carDirectionSelect.setVisibility(View.GONE);
+                                } else if (carDirectionSelect.getVisibility() == View.GONE) {
+                                    carDirectionSelect.setVisibility(View.VISIBLE);
+                                }
+                            } else {
+                                constructCarInfo(col, row, checkDirection(curSelectedGrp, false));
+                            }
+
+                            if (myRobot == null) {
+                                updateRobotInfo(col, row, checkDirection(curSelectedGrp, false));
+                            } else {
+                                updateRobotInfo(col, row, myRobot.getDirection());
+                            }
+
+                            int[] newDirectionCoord = map.updateDirectionSelection(newRobotDirCoord[0], newRobotDirCoord[1]);
+                            int directionSelectX = (newDirectionCoord[0]) + (int) (map.getX());
+                            int directionSelecty = (newDirectionCoord[1]) + (int) (map.getY());
+
+                            currentCarCoords = newRobotDirCoord;
+                            carDirectionSelect.setX(directionSelectX);
+                            carDirectionSelect.setY(directionSelecty);
+
+                            // car direction button listener
+                            ImageButton carUpBtn = (ImageButton) findViewById(R.id.carDirectionUpBtn);
+                            carUpBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    constructCarInfo(col, row, Constants.NORTH);
+                                    carDirectionSelect.setVisibility(View.GONE);
+                                    if (!myRobot.getDirection().equals(Constants.NORTH)) {
+                                        robotGrp.setRotation(map.convertFacingToRotation(myRobot.getDirection()) + map.calculateRotateAngle(myRobot.getDirection(), Constants.NORTH));
+                                    }
+                                    updateRobotInfo(col, row, Constants.NORTH);
+                                }
+                            });
+
+                            ImageButton carLeftBtn = (ImageButton) findViewById(R.id.carDirectionLeftBtn);
+                            carLeftBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    constructCarInfo(col, row, Constants.WEST);
+                                    carDirectionSelect.setVisibility(View.GONE);
+                                    if (!myRobot.getDirection().equals(Constants.WEST)) {
+                                        robotGrp.setRotation(map.convertFacingToRotation(myRobot.getDirection()) + map.calculateRotateAngle(myRobot.getDirection(), Constants.WEST));
+                                    }
+                                    updateRobotInfo(col, row, Constants.WEST);
+                                }
+                            });
+
+                            ImageButton carRightBtn = (ImageButton) findViewById(R.id.carDirectionRightBtn);
+                            carRightBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    constructCarInfo(col, row, Constants.EAST);
+                                    carDirectionSelect.setVisibility(View.GONE);
+                                    if (!myRobot.getDirection().equals(Constants.EAST)) {
+                                        robotGrp.setRotation(map.convertFacingToRotation(myRobot.getDirection()) + map.calculateRotateAngle(myRobot.getDirection(), Constants.EAST));
+                                    }
+                                    updateRobotInfo(col, row, Constants.EAST);
+                                }
+                            });
+
+                            ImageButton carDownBtn = (ImageButton) findViewById(R.id.carDirectionDownBtn);
+                            carDownBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    constructCarInfo(col, row, Constants.SOUTH);
+                                    carDirectionSelect.setVisibility(View.GONE);
+                                    if (!myRobot.getDirection().equals(Constants.SOUTH)) {
+                                        robotGrp.setRotation(map.convertFacingToRotation(myRobot.getDirection()) + map.calculateRotateAngle(myRobot.getDirection(), Constants.SOUTH));
+                                    }
+                                    updateRobotInfo(col, row, Constants.SOUTH);
+                                }
+                            });
+                        }
+                        map.invalidate();
+                        break;
+                    case DragEvent.ACTION_DRAG_ENDED:
+                        // Remove the highlight from the cell
+                        break;
+                    default:
+                        break;
+                }
+                return true;
+            }
+        });
+
+        /**
+         * when the drop of the obstacle/robot car is out of the map, move it to the original starting place
+         */
+        ViewGroup parentView = (ViewGroup) map.getParent();
+        parentView.setOnDragListener(new View.OnDragListener() {
+            @Override
+            public boolean onDrag(View view, DragEvent event) {
+                int x = (int) event.getX();
+                int y = (int) event.getY();
+                int mapWidth = map.getWidth();
+                int mapHeight = map.getHeight();
+                int[] mapCoord = new int[2];
+                map.getLocationOnScreen(mapCoord);
+
+                if (event.getAction() == DragEvent.ACTION_DROP) {
+                    ConstraintLayout curObstacleGrp = (ConstraintLayout) event.getLocalState();
+
+                    String itemIdString = getResources().getResourceEntryName(curObstacleGrp.getId());
+
+                    if (itemIdString.indexOf("obstacle") >= 0) {
+                        //handle obstacle
+                        if (x < mapCoord[0] || x > mapCoord[0] + mapWidth || y < mapCoord[1] || y > mapCoord[1] + mapHeight) {
+
+                            // loop through obstacleviews to find the obstacle name
+                            // set according to obstacle coord
+                            for (int i = 0; i < obstacleViews.size(); i++) {
+                                if (curObstacleGrp == obstacleViews.get(i)) {
+                                    curObstacleGrp.setX(originalObstacleCoords[i][0]);
+                                    curObstacleGrp.setY(originalObstacleCoords[i][1]);
+                                    break;
+                                }
+                            }
+
+                            //reset coordinates of current.
+                            int index = getObstacleNumber(curObstacleGrp);
+                            currentObstacleCoords[index - 1][0] = 0;
+                            currentObstacleCoords[index - 1][1] = 0;
+
+                            map.updateObstaclesData(index - 1, -1, -1, "");
+
+//                          printAllObstacleCoords();
+
+                            plottedObstacleNo--;
+                            if (plottedObstacleNo <= 0) {
+                                obstacleDirectionSelect.setVisibility(View.GONE);
+                            }
+
+                            //remove obstacle cell from map
+                            if (pastX >= map.getX() && pastX <= map.getX() + map.getWidth() && pastY >= map.getY() && pastY <= map.getY() + map.getHeight()) {
+                                map.removeObstacleUsingCoord(pastX - map.getX() + map.getCellSize() / 2, pastY - map.getY() + map.getCellSize() / 2);
+                            }
+                            map.invalidate();
+                            plottedObstacleNo--;
+
+                            obstacleDirectionSelect.setVisibility(View.GONE);
+
+
+                        }
+                    } else if (itemIdString.indexOf("robotcar") >= 0) {
+                        //handle robotcar
+                        curObstacleGrp.setX(originalCarCoords[0]);
+                        curObstacleGrp.setY(originalCarCoords[1]);
+                        carDirectionSelect.setVisibility(View.GONE);
+                        myRobot = null;
+
+                        //remove car cell from map
+                        map.removeCarCells();
+                        map.invalidate();
+                    }
+
+                }
+                return true;
+            }
+        });
+    }
+
+    /**
+     * a function to keep track of the car during exploration and fastest path
+     */
+    @SuppressLint("DefaultLocale")
+    public void trackRobot() {
+        int[] robotImageCoord = map.getCurCoord();
+        int[] robotLocation = map.setRobotImagePosition(robotImageCoord[0], map.convertRow(robotImageCoord[1]), map.getLeft(), map.getTop());
+        robotGrp.setX(robotLocation[0]);
+        robotGrp.setY(robotLocation[1]);
+        robotGrp.setRotation(rotation);
+
+        //Setting displays
+        String locationNotif = String.format("Car position - X: %d, Y: %d, direction: %s\n", robotImageCoord[0], robotImageCoord[1], map.convertRotationToFacing(rotation));
+        printMessage(locationNotif);
+
+    }
+
+
+    /**
+     * convert the constraint layout obstacle to an index
+     *
+     * @param obstacle
+     * @return
+     */
+    public int getObstacleNumber(ConstraintLayout obstacle) {
+        for (int i = 0; i < obstacleViews.size(); i++) {
+            if (obstacle == obstacleViews.get(i)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    public void updateCarLocation(int row, int col, String direction, boolean isFromRpi) {
+        // close the car direction selection arrows
+        carDirectionSelect.setVisibility(View.GONE);
+
+        // return if the car moving out of the map boundary
+        // return if obstacle blocks the way
+//        if (row <= 0 || row > Constants.GRID_SIZE - 2 || col <= 0 || col > Constants.GRID_SIZE - 2 || map.isCellOccupiedByObstacle(col, row)) {
+//            Toast.makeText(MainActivity.this, "The robot cannot be moved to here", Toast.LENGTH_SHORT).show();
+//            return;
+//        }
+
+        float cellSize = map.getCellSize();
+        int x = (int) (col) * (int) cellSize + (int) (map.getX());
+        int y = (int) (20 - row - 2) * (int) cellSize + (int) (map.getY());
+
+        robotGrp.setX(x);
+        robotGrp.setY(y);
+
+        if (!myRobot.getDirection().equals(direction)) {
+            robotGrp.setRotation(map.convertFacingToRotation(myRobot.getDirection()) + map.calculateRotateAngle(myRobot.getDirection(), direction));
+        }
+
+        myRobot.setCol(col);
+        myRobot.setRow(row);
+        myRobot.setDirection(direction);
+
+        if(!isFromRpi){
+            //white cells indicate explored path. so if simply using the app as controller then need to remove explored path
+            map.removeCarCells();
+        }
+
+        map.setCellRobot(col + 1, 20 - row - 1);
+        map.invalidate();
+    }
+
+    private static void showLog(String message) {
+        Log.d(TAG, message);
+    }
+
+    private static SharedPreferences getSharedPreferences(Context context) {
+        return context.getSharedPreferences("Shared Preferences", Context.MODE_PRIVATE);
+    }
+
+    private void updateObstacleText(int obstacleId, int targetId){
+        TextView target = obstacleTextViews.get(obstacleId-1);
+        target.setText(String.valueOf(targetId));
+        target.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+        target.setTypeface(null, Typeface.BOLD);
+    }
+
+    private BroadcastReceiver mBroadcastReceiver5 = new BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            BluetoothDevice mDevice = intent.getParcelableExtra("Device");
+            String status = intent.getStringExtra("Status");
+            sharedPreferences();
+
+            if (status.equals("connected")) {
+                try {
+                    myDialog.dismiss();
+                } catch (NullPointerException e) {
+                    e.printStackTrace();
+                }
+
+                Log.d(TAG, "mBroadcastReceiver5: Device now connected to " + mDevice.getName());
+                Toast.makeText(MainActivity.this, "Device is now connected to " + mDevice.getName(), Toast.LENGTH_LONG).show();
+                editor.putString("connStatus", "Connected to " + mDevice.getName());
+            } else if (status.equals("disconnected")) {
+                Log.d(TAG, "mBroadcastReceiver5: Disconnected from " + mDevice.getName());
+                Toast.makeText(MainActivity.this, "Disconnected from " + mDevice.getName(), Toast.LENGTH_LONG).show();
+                editor.putString("connStatus", "Disconnected");
+                myDialog.show();
+            }
+            editor.commit();
+        }
+    };
+
+    BroadcastReceiver messageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String message = intent.getStringExtra("receivedMessage");
+            showLog("receivedMessage: message --- " + message);
+            //Toast.makeText(MainActivity.this, "Message: " + message, Toast.LENGTH_LONG).show();
+            printMessage(message);
+            try {
+
+                //parse locationupdate message
+                if (message.startsWith("locationUpdate ")) {
+                    //Split message into 2 different parts, "locationUpdate " and "<row>,<col>,<direction>"
+                    String[] stringArr = message.split(" ", 2);
+
+                    //Split "row,col,direction" into individual components to update car location
+                    String coords = stringArr[1];
+                    String[] coordsArr = coords.split(",", 3);
+
+                    //Assign variables from split string
+                    String col, row, direction;
+                    col = coordsArr[0];
+                    row = coordsArr[1];
+                    direction = coordsArr[2];
+
+                    int colInt, rowInt;
+                    colInt = Integer.parseInt(row);
+                    rowInt = Integer.parseInt(col);
+
+                    if (rowInt < 0 && rowInt > 20 && colInt < 0 && colInt > 20) {
+                        Toast.makeText(MainActivity.this, "Invalid coordinates!", Toast.LENGTH_LONG).show();
+                    }
+
+                    if (direction.length() > 1) {
+                        Toast.makeText(MainActivity.this, "Invalid direction!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    if (direction.startsWith("N") || direction.startsWith("S") || direction.startsWith("E") || direction.startsWith("W")) {
+                        //Check to see if direction contains these characters
+                    } else {
+                        Toast.makeText(MainActivity.this, "Invalid direction!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    //Toast.makeText(MainActivity.this, "Row: " + row + "\nCol: " + col + "\nDirection: " + direction, Toast.LENGTH_LONG).show();
+
+                    updateCarLocation(colInt, rowInt, direction, true);
+                }
+
+                //parse image message
+                if (message.startsWith("image ")) {
+                    //Split message into 3 different parts, "message ", "<obstacle number>", "<target id>"
+                    String[] imageArr = message.split(" ", 3);
+
+                    //Assign variables from split string
+                    String obstacleNo, targetId;
+                    obstacleNo = imageArr[1];
+                    targetId = imageArr[2];
+
+                    int obstacleNoInt, targetIdInt;
+                    obstacleNoInt = Integer.parseInt(obstacleNo);
+                    targetIdInt = Integer.parseInt(targetId);
+
+                    if (obstacleNoInt < 1 || obstacleNoInt > 8) {
+                        Toast.makeText(MainActivity.this, "Invalid obstacle number!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    if (targetIdInt < 11 || targetIdInt > 40) {
+                        Toast.makeText(MainActivity.this, "Invalid target id!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    /*Toast.makeText(MainActivity.this, "Obstacle No: " + obstacleNo +
+                            "\nTarget Id: " + targetId, Toast.LENGTH_LONG).show();*/
+
+                    updateObstacleText(obstacleNoInt, targetIdInt);
+                }
+
+                //parse robot status
+                if (message.startsWith("STATUS:")) {
+                    //Split message into 2 parts, "STATUS:" and "<action>"
+                    String[] statusArr = message.split(":", 2);
+
+                    //Assign variables from split string
+                    String action = statusArr[1];
+
+                    //Send actions to Robot Status tab
+                    ControlTabFragment.setRobotStatusesTextView(action);
+
+                    //Toast.makeText(MainActivity.this, "The robot is doing action: " + action, Toast.LENGTH_LONG).show();
+                }
+
+                //parse robot direction message (THIS IS FOR CHECKLIST)
+                if (message.startsWith("ROBOT,")) {
+
+                    //Split message into 4 different parts, "ROBOT", "<row>", "<col>", "<direction>"
+                    String[] stringArr = message.split(",", 4);
+
+                    //Assign variables from split string
+                    String row, col, direction;
+                    row = stringArr[1];
+                    //row = row.replaceAll("[\\[\\]<>]","");
+                    col = stringArr[2];
+                    //col = col.replaceAll("[\\[\\]<>]","");
+                    direction = stringArr[3];
+                    //direction = direction.replaceAll("[\\[\\]<>]","");
+
+                    int rowInt, colInt;
+                    rowInt = Integer.parseInt(row);
+                    colInt = Integer.parseInt(col);
+
+                    if (rowInt < 0 || rowInt > 20 || colInt < 0 || colInt > 20) {
+                        Toast.makeText(MainActivity.this, "Invalid coordinates!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    if (direction.length() > 1) {
+                        Toast.makeText(MainActivity.this, "Invalid direction!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    if (direction.startsWith("N") || direction.startsWith("S") || direction.startsWith("E") || direction.startsWith("W")) {
+                        //Check to see if direction contains these characters
+                    } else {
+                        Toast.makeText(MainActivity.this, "Invalid direction!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    //Toast.makeText(MainActivity.this, "Row: " + row + "\nCol: " + col + "\nDirection: " + direction, Toast.LENGTH_LONG).show();
+                    updateCarLocation(rowInt, colInt, direction, true);
+                }
+
+                //parse image message (THIS IS FOR CHECKLIST)
+                if (message.startsWith("TARGET,")) {
+                    //Split message into 3 parts, "TARGET", "<Obstacle Number>", "<Target ID>"
+                    String[] stringArr = message.split(",", 3);
+
+                    //Assign variables from split string
+                    String obstacleNo, targetId;
+                    obstacleNo = stringArr[1];
+                    //obstacleNo = obstacleNo.replaceAll("[\\[\\]<>]","");
+                    targetId = stringArr[2];
+                    //targetId = targetId.replaceAll("[\\[\\]<>]","");
+
+                    int obstacleNoInt, targetIdInt;
+                    obstacleNoInt = Integer.parseInt(obstacleNo);
+                    targetIdInt = Integer.parseInt(targetId);
+
+                    if (obstacleNoInt < 1 || obstacleNoInt > 8) {
+                        Toast.makeText(MainActivity.this, "Invalid obstacle number!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+                    if (targetIdInt < 11 || targetIdInt > 40) {
+                        Toast.makeText(MainActivity.this, "Invalid target id!", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+
+//                    Toast.makeText(MainActivity.this, "Obstacle No: " + obstacleNo +
+//                            "\nTarget Id: " + targetId, Toast.LENGTH_LONG).show();
+
+                    updateObstacleText(obstacleNoInt, targetIdInt);
+                }
+
+                if(message.equals("stop")){
+                    ControlTabFragment.stopExplore();
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            /*sharedPreferences();
+            String receivedText = sharedPreferences.getString("message", "") + "\n" + message;
+            editor.putString("message", receivedText);
+            editor.commit();
+            refreshMessageReceived();*/
+        }
+    };
+}

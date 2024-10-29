@@ -1,0 +1,50 @@
+from typing import Optional
+
+LABEL_NAMES = {
+    "bull": 1,
+    "1": 11,
+    "2": 12,
+    "3": 13,
+    "4": 14,
+    "5": 15,
+    "6": 16,
+    "7": 17,
+    "8": 18,
+    "9": 19,
+    "a": 20,
+    "b": 21,
+    "c": 22,
+    "d": 23,
+    "e": 24,
+    "f": 25,
+    "g": 26,
+    "h": 27,
+    "s": 28,
+    "t": 29,
+    "u": 30,
+    "v": 31,
+    "w": 32,
+    "x": 33,
+    "y": 34,
+    "z": 35,
+    "up": 36,
+    "down": 37,
+    "right": 38,
+    "left": 39,
+    "stop": 40,
+
+    # FIXME: The label below is incorrect.
+    # "q": 0,
+}
+
+VALID_LABEL_NAMES_FOR_DETECTION = [
+    name for name in LABEL_NAMES.keys() if name != "bull"
+]
+
+VALID_LABEL_NAMES_FOR_FASTEST_PATH = ["left", "right"]
+
+
+def get_image_id(label: str) -> Optional[int]:
+    if label not in LABEL_NAMES:
+        return None
+    return LABEL_NAMES[label]

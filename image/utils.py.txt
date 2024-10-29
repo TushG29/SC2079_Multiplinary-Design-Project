@@ -1,0 +1,10 @@
+from io import BytesIO
+
+from PIL import Image
+
+
+def jpeg_encode(image: Image.Image) -> bytes:
+    data_io = BytesIO()
+    image.save(data_io, format="jpeg")
+    data = data_io.getvalue()
+    return data

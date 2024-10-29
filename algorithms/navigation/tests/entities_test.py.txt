@@ -1,0 +1,31 @@
+import pytest
+
+from algorithms.navigation.entities import Position, Obstacle, Direction
+
+
+class TestDirection:
+    @pytest.mark.parametrize(
+        "direction, expected",
+        [
+            (Direction.NORTH, Direction.SOUTH),
+            (Direction.SOUTH, Direction.NORTH),
+            (Direction.EAST, Direction.WEST),
+            (Direction.WEST, Direction.EAST),
+        ],
+    )
+    def test_get_opposite_direction(self, direction: Direction, expected: Direction):
+        assert direction.get_opposite_direction() == expected
+
+
+class TestObstacle:
+    @pytest.mark.parametrize(
+        "obstacle_position, expected_target_robot_position",
+        [
+            (Position(0, 5, Direction.SOUTH), Position(0, 2, Direction.NORTH)),
+            (Position(3, 7, Direction.EAST), Position(6, 7, Direction.WEST)),
+        ],
+    )
+    def test_get_target_robot_position(self, obstacle_position: Position, expected_target_robot_position: Position):
+        obstacle = Obstacle(obstacle_position)
+        actual_target_robot_position: Position = obstacle.get_robot_target_position()
+        assert actual_target_robot_position == expected_target_robot_position

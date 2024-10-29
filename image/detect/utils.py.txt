@@ -1,0 +1,36 @@
+from typing import List, Optional
+
+from PIL import Image
+try:
+    from ultralytics.engine.results import Results
+    from ultralytics.utils.plotting import Annotator, colors
+except ImportError:
+    # ultralytics<8.0.136
+    from ultralytics.yolo.engine.results import Results  # type: ignore
+    from ultralytics.yolo.utils.plotting import Annotator, colors  # type: ignore
+
+from image.names import get_image_id
+
+
+# Modified from `Results.plot` to support plotting only one result.
+# https://github.com/ultralytics/ultralytics/blob/137552996a0aaeb90fa0c1d6da40f012f8801a00/ultralytics/yolo/engine/results.py#L165
+def annotate_image(result: Results,
+                   indices: Optional[List[int]] = None) -> Image.Image:
+    names = result.names
+    annotator = Annotator(im=result.orig_img, example=names)
+
+    if indices is None:
+        indices = list(range(result.boxes.shape[0]))
+
+    for i in indices:
+        box = result.boxes[i]
+        c = int(box.cls)
+        name = names[int(box.cls)]
+        confidence = float(box.conf)
+        image_id = get_image_id(name) or "dunno"
+        label = f"[{image_id}] {name} ({confidence:.4f})"
+        annotator.box_label(box.xyxy.squeeze(), label, color=colors(c, True))
+
+    image_array = annotator.result()
+    result = Image.fromarray(image_array[..., ::-1])  # RGB PIL image
+    return result

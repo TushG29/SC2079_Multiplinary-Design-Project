@@ -1,0 +1,249 @@
+from threading import Condition, Lock, Thread
+from time import sleep, time
+from typing import Dict
+
+from loguru import logger
+
+from algorithms.navigation.entities import Obstacle, Position
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.robot import Robot
+from pi import constants
+from pi.car.car import Car
+from pi.comm.rfcomm import RfcommServerConnection
+from pi.comm.serial import SerialConnection
+from pi.comm.messages import (
+    ModeMessage,
+    ObstaclesMessage,
+    OperationMode,
+    parse_message,
+    StartPointMessage,
+    StopMessage,
+)
+
+init_condition = Condition()
+stop_mutex = Lock()
+
+serial: SerialConnection = None
+rfcomm: RfcommServerConnection = None
+car: Car = None
+
+mode: OperationMode = None
+starting_position: Position = None
+obstacles: Dict[str, Obstacle] = None
+
+stopped = True
+
+
+def ready() -> bool:
+    global mode, starting_position, obstacles
+    if mode is None:
+        return False
+    if mode == OperationMode.DISCOVER_OBSTACLES:
+        return starting_position is not None and obstacles is not None
+    if mode == OperationMode.FASTEST_PATH:
+        return True
+    return False
+
+
+def reset() -> None:
+    global mode, starting_position, obstacles
+    mode = None
+    starting_position = None
+    obstacles = None
+
+
+def init(data: str) -> None:
+    global init_condition, stop_mutex
+    global rfcomm, car
+    global mode, starting_position, obstacles
+    global stopped
+
+    if data.strip() == "":
+        return
+
+    message = parse_message(data)
+    if message is None:
+        rfcomm.send(f"Could not parse message {data}")
+        logger.error(f"Could not parse message {data}")
+        return
+
+    if isinstance(message, ModeMessage):
+        with init_condition:
+            mode = message.mode
+            logger.info(f"Received mode: {mode}")
+            init_condition.notify()
+    elif isinstance(message, StartPointMessage):
+        with init_condition:
+            starting_position = message.position
+            logger.info(f"Received starting point: {starting_position}")
+            init_condition.notify()
+    elif isinstance(message, ObstaclesMessage):
+        with init_condition:
+            obstacles = message.obstacles
+            logger.info(f"Received obstacles: {obstacles}")
+            init_condition.notify()
+    elif isinstance(message, StopMessage):
+        if car is not None:
+            logger.info("Received stop signal; stopping car")
+            with stop_mutex:
+                stopped = True
+                logger.info("Car stopped")
+        else:
+            logger.error("Received stop signal but car is not initialised")
+    else:
+        logger.error(f"Unexpected message: {message}")
+
+
+def discover_obstacles() -> bool:
+    global stop_mutex
+    global rfcomm, car
+    global starting_position, obstacles
+    global stopped
+
+    start_time = time()
+
+    car.update_obstacles(obstacles)
+    grid = Grid(constants.GRID_HEIGHT, constants.GRID_WIDTH,
+                list(obstacles.values()))
+    robot = Robot(grid, starting_position)
+    try:
+        instructions = robot.get_compressed_instructions()
+    except Exception as e:
+        logger.error(f"Failed to get instructions: {e}")
+
+    stopped = False
+
+    for instruction in instructions:
+        with stop_mutex:
+            if stopped:
+                return False
+            time_elapsed = time() - start_time
+            logger.info(f"Time elapsed: {time_elapsed:.3f}s")
+            if time_elapsed >= constants.DISCOVER_OBSTACLES_TIMEOUT_SECONDS:
+                stopped = True
+                logger.warning("Stopping due to timeout")
+                rfcomm.send(StopMessage().serialize())
+                return False
+            car.execute(instruction)
+    stopped = True
+    logger.info("Finished!")
+    rfcomm.send(StopMessage().serialize())
+
+    return True
+
+
+def fastest_path() -> bool:
+    global stop_mutex
+    global rfcomm, car
+    global stopped
+
+    start_time = time()
+
+    stopped = False
+
+    direction = None
+    for i in range(3):
+        if i > 0:
+            last_direction = direction
+            direction = car.check_direction(f"Obstacle {i}")
+            if direction is not None:
+                logger.info(f"Direction for obstacle {i}: {direction}")
+            else:
+                direction = "right"
+                logger.error(f"Failed to detect direction for obstacle {i}; "
+                             f"assuming {direction}")
+
+        if i == 0:
+            next_signal = b"ccccc"
+        elif i == 1:
+            if direction == "left":
+                next_signal = b"jjjjj"
+            else:  # direction == "right"
+                next_signal = b"kkkkk"
+        elif i == 2:
+            logger.debug(f"Last direction: {last_direction}")
+            logger.debug(f"Current direction: {direction}")
+            if (last_direction, direction) == ("left", "left"):
+                next_signal = b"MMMMM"
+            elif (last_direction, direction) == ("left", "right"):
+                next_signal = b"NNNNN"
+            elif (last_direction, direction) == ("right", "left"):
+                next_signal = b"PPPPP"
+            elif (last_direction, direction) == ("right", "right"):
+                next_signal = b"OOOOO"
+
+        with stop_mutex:
+            if stopped:
+                return False
+            time_elapsed = time() - start_time
+            logger.info(f"Time elapsed: {time_elapsed:.3f}s")
+            if time_elapsed >= constants.DISCOVER_OBSTACLES_TIMEOUT_SECONDS:
+                stopped = True
+                logger.warning("Stopping due to timeout")
+                rfcomm.send(StopMessage().serialize())
+                return False
+            car.serial.send(next_signal)
+            car.serial.receive()
+
+    stopped = True
+    logger.info("Finished!")
+    time_elapsed = time() - start_time
+    logger.info(f"Time elapsed: {time_elapsed:.3f}s")
+    rfcomm.send(StopMessage().serialize())
+
+    return True
+
+
+def main() -> None:
+    global serial, rfcomm, car
+    global init_condition, mode, starting_position, obstacles
+
+    serial = SerialConnection(constants.SERIAL_PORT_GLOB,
+                              constants.SERIAL_BAUDRATE)
+    rfcomm = RfcommServerConnection(constants.RFCOMM_SERVICE_NAME,
+                                    constants.RFCOMM_SERVICE_UUID,
+                                    lambda msg: init(msg))
+    car = Car(serial, rfcomm)
+
+    car_init_mutex = Lock()
+    starting = False
+
+    def car_init() -> None:
+        while True:
+            with car_init_mutex:
+                if starting:
+                    break
+                logger.info("Initialising car")
+                car.init()
+            logger.info("Car initialisation finished; waiting for 15s...")
+            sleep(15)
+
+    car_init_thr = Thread(target=car_init, args=[])
+    car_init_thr.start()
+
+    while True:
+        logger.info("Waiting for initialisation to complete")
+        with init_condition:
+            while not ready():
+                init_condition.wait()
+
+        if mode == OperationMode.DISCOVER_OBSTACLES:
+            with car_init_mutex:
+                starting = True
+            success = discover_obstacles()
+            if success:
+                break
+        elif mode == OperationMode.FASTEST_PATH:
+            with car_init_mutex:
+                starting = True
+            success = fastest_path()
+            if success:
+                break
+
+        # Reset and restart
+        logger.info("Previous run was stopped; resetting")
+        reset()
+
+
+if __name__ == "__main__":
+    main()

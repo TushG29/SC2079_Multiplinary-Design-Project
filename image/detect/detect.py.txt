@@ -1,0 +1,53 @@
+from typing import List, Tuple
+
+from loguru import logger
+from PIL import Image
+from torch import Tensor
+try:
+    from ultralytics.engine.results import Results
+except ImportError:
+    # ultralytics<8.0.136
+    from ultralytics.yolo.engine.results import Results  # type: ignore
+
+from image.detect import model
+from image.detection import Detection
+from image.names import get_image_id
+
+
+def distance_from_center(box: Tensor, image_size: Tuple[int, int]):
+    x1, y1 = float(box[0]), float(box[1])
+    x2, y2 = float(box[2]), float(box[3])
+    box_center = ((x1 + x2) / 2, (y1 + y2) / 2)
+    image_center = (image_size[0] / 2, image_size[1] / 2)
+    dist = sum((x - y)**2.0 for x, y in zip(box_center, image_center))**0.5
+    return dist
+
+
+def detect(image: Image.Image) -> Tuple[Results, List[Detection]]:
+    logger.info("Predicting")
+
+    result = model.predict(image)[0]
+    detections = []
+
+    detections_count = result.boxes.shape[0]
+    if detections_count == 0:
+        logger.warning("No detection from image")
+    else:
+        for i in range(detections_count):
+            box = result.boxes[i]
+            cls = int(box.cls)
+            name = result.names[cls]
+            image_id = get_image_id(name)
+            confidence = float(box.conf)
+            distance = distance_from_center(*box.xyxy, image.size)
+            detection = Detection(
+                index=i,
+                name=name,
+                id=image_id,
+                confidence=confidence,
+                distance_from_center=distance)
+            logger.info(f"Detected [{image_id}] {name} "
+                        f"(confidence {confidence}; "
+                        f"distance from centre: {distance})")
+            detections.append(detection)
+    return result, detections

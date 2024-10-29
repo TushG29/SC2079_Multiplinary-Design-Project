@@ -1,0 +1,11 @@
+from pathlib import Path
+
+from picamera import PiCamera
+
+CAMERA_RESOLUTION = (640, 480)
+
+camera = PiCamera()
+camera.resolution = CAMERA_RESOLUTION
+
+CAPTURES_DIR = Path("captures")
+CAPTURES_DIR.mkdir(parents=True, exist_ok=True)

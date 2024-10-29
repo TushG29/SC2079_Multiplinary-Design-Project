@@ -1,0 +1,103 @@
+from glob import glob
+from os import getenv
+from queue import Queue
+from threading import Lock, Thread
+from time import sleep
+from typing import Tuple
+
+from loguru import logger
+from serial import Serial
+
+
+class SerialConnection:
+    port_glob: str
+    baudrate: int
+
+    connection: Serial
+
+    reconnect_mutex: Lock
+
+    message_queue: "Queue[Tuple[bytes, Queue[None]]]"
+    receive_buffer: "Queue[bytes]"
+
+    debug: bool
+
+    def __init__(self, port_glob: str, baudrate: int) -> None:
+        self.port_glob = port_glob
+        self.baudrate = baudrate
+        self.message_queue = Queue()
+
+        self.reconnect_mutex = Lock()
+        self._reconnect()
+
+        self.message_queue = Queue()
+        self.receive_buffer = Queue()
+        Thread(target=self._send_worker, args=[]).start()
+        Thread(target=self._receive_worker, args=[]).start()
+
+        self.debug = getenv("SERIAL_DEBUG") and True or False
+
+    def _reconnect(self) -> Serial:
+        # This resembles pi.comm.rfcomm.RfcommServerConnection._reconnect.
+        will_reconnect = True
+        if self.reconnect_mutex.locked():
+            will_reconnect = False
+        with self.reconnect_mutex:
+            if not will_reconnect:
+                return
+            while True:
+                try:
+                    ports = glob(self.port_glob)
+                    if not ports:
+                        logger.debug(f"Port not found for {self.port_glob}")
+                        sleep(0.2)
+                        continue
+                    port = ports[0]
+                    connection = Serial(port=port, baudrate=self.baudrate)
+                    logger.info(f"Established connection to {port}")
+                    break
+                except OSError as e:
+                    logger.error(f"Failed to establish connection: {e}")
+                    sleep(0.2)
+            self.connection = connection
+
+    def send(self, data: bytes) -> None:
+        if self.debug:
+            logger.debug(f"Serial will send {data}")
+            input("Press Enter to continue... ")
+        wait_queue: Queue[None] = Queue()
+        self.message_queue.put((data, wait_queue))
+        wait_queue.get()
+
+    def _send_worker(self) -> None:
+        while True:
+            data, wait_queue = self.message_queue.get()
+            while True:
+                try:
+                    self.connection.write(data)
+                    logger.debug(f"Serial sent raw data {data}")
+                    wait_queue.put(None)
+                    break
+                except OSError as e:
+                    logger.error(f"Failed to send data {data}: {e}")
+                    logger.info("Will attempt to reconnect")
+                    self._reconnect()
+
+    def receive(self, size: int = 1) -> bytes:
+        buffer = bytearray()
+        for _ in range(size):
+            buffer += self.receive_buffer.get()
+        return bytes(buffer)
+
+    def _receive_worker(self) -> bytes:
+        while True:
+            try:
+                data = self.connection.read(1)
+                logger.debug(f"Serial received raw data {data}")
+                self.receive_buffer.put(data)
+            except OSError as e:
+                # OSError may not necessarily be disconnection, so this is a
+                # little bit overkill. But there doesn't seem to be a good
+                # way to tell what the exact error is.
+                logger.error(f"Serial disconnected: {e}")
+                self._reconnect()

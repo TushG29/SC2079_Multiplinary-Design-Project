@@ -1,0 +1,35 @@
+from typing import List
+
+from algorithms.navigation.entities import Position, Direction, Obstacle
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.instruction import Instruction
+from algorithms.navigation.robot import Robot
+
+
+def navigate_around_obstacle(distance_between_robot_and_obstacle: int) -> List[Instruction]:
+    """
+    Finds a path for the robot to take to navigate around the obstacle and locate the image on an unknown side of the
+    obstacle.
+
+    Args:
+        distance_between_robot_and_obstacle: The distance between the closest sides of the robot and the obstacle
+            in front of it.
+
+    Returns:
+        A compressed list of instructions that the robot should follow to find the image on a side of the obstacle.
+    """
+    robot_x_coordinate, robot_y_coordinate = (6, 1)
+    coordinates_offset = distance_between_robot_and_obstacle + 2
+    obstacle_x_coordinate, obstacle_y_coordinate = (
+        robot_x_coordinate,
+        robot_y_coordinate + coordinates_offset,
+    )
+    obstacles = [
+        Obstacle(Position(obstacle_x_coordinate, obstacle_y_coordinate, Direction.NORTH)),
+        Obstacle(Position(obstacle_x_coordinate, obstacle_y_coordinate, Direction.SOUTH)),
+        Obstacle(Position(obstacle_x_coordinate, obstacle_y_coordinate, Direction.EAST)),
+        Obstacle(Position(obstacle_x_coordinate, obstacle_y_coordinate, Direction.WEST)),
+    ]
+    grid = Grid(20, 13, obstacles)
+    robot = Robot(grid, Position(robot_x_coordinate, robot_y_coordinate, Direction.NORTH))
+    return robot.get_compressed_instructions()

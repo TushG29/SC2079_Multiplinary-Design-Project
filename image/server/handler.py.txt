@@ -1,0 +1,158 @@
+from datetime import datetime
+import json
+from http.server import BaseHTTPRequestHandler
+from io import BytesIO
+from typing import Dict
+from urllib.parse import unquote_plus
+
+from loguru import logger
+from PIL import Image
+
+from image.detect.detect import detect
+from image.detect.utils import annotate_image
+from image.detection import get_best_detection
+from image.server import REQUESTS_DIR
+from image.utils import jpeg_encode
+
+detected_images: Dict[str, Image.Image] = {}
+
+
+def request_filename(label: str, extension: str) -> str:
+    timestamp = datetime.now().replace(microsecond=0).isoformat()
+    return REQUESTS_DIR / f"{timestamp}.{label}.{extension}"
+
+
+HTML_BODY_PLACEHOLDER = "@@HTML_BODY@@"
+HTML_TEMPLATE = f"""<html>
+<head>
+  <title>MDP Group 20</title>
+</head>
+<body>
+  <h1>MDP Group 20</h1>
+{HTML_BODY_PLACEHOLDER}</body>
+</html>
+"""
+
+CELL_LABEL_PLACEHOLDER = "@@CELL_LABEL@@"
+CELL_URL_PLACEHOLDER = "@@CELL_URL@@"
+CELL_TEMPLATE = f"""  <div style="display: inline-block">
+    <h2>{CELL_LABEL_PLACEHOLDER}</h2>
+    <img src="{CELL_URL_PLACEHOLDER}" width=320 height=240 />
+</div>
+"""
+
+
+def make_html(detected_images: Dict[str, Image.Image]) -> str:
+    contents = ""
+
+    if detected_images:
+        successes = []
+        failures = []
+        for label in detected_images.keys():
+            if "-failed-" in label:
+                failures.append(label)
+            else:
+                successes.append(label)
+        for label in [*sorted(successes), *failures]:
+            cell = CELL_TEMPLATE
+            cell = cell.replace(CELL_LABEL_PLACEHOLDER, label)
+            cell = cell.replace(CELL_URL_PLACEHOLDER, f"/{label}")
+            contents += cell
+    else:
+        contents += "  <p>No detections so far.</p>\n"
+
+    html = HTML_TEMPLATE.replace(HTML_BODY_PLACEHOLDER, contents)
+    return html
+
+
+class ImageRecognitionHTTPRequestHandler(BaseHTTPRequestHandler):
+
+    def _send_response(self,
+                       code: int,
+                       content_type: str = None,
+                       data: bytes = None) -> None:
+        self.protocol_version = "HTTP/1.1"
+        self.send_response(code)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        if data:
+            self.send_header("Content-Length", len(data))
+        self.end_headers()
+        if data:
+            self.wfile.write(data)
+
+    def do_GET(self):
+        global detected_images
+        path = unquote_plus(self.path.lstrip("/"))
+
+        if path == "reset":
+            detected_images = {}
+            self._send_response(400, "text/html", b"OK")
+            return
+
+        if path in detected_images:
+            image = jpeg_encode(detected_images[path])
+            self._send_response(200, "image/jpeg", image)
+            return
+
+        if self.path != "/":
+            self._send_response(404)
+            return
+
+        html = make_html(detected_images)
+        response = html.encode()
+        self._send_response(200, "text/html; charset=utf-8", response)
+
+    def do_POST(self):
+        path = unquote_plus(self.path.lstrip("/"))
+
+        annotate_best_only = (self.headers["X-annotate-best-only"] or
+                              "").lower() == "true"
+        annotate_labels = [
+            label
+            for label in (self.headers["X-annotate-labels"] or "").split(",")
+            if len(label) != 0
+        ]
+        hide_in_history = (self.headers["X-hide-in-history"] or
+                           "").lower() == "true"
+
+        content_length = int(self.headers["Content-Length"] or 0)
+        data = self.rfile.read(content_length)
+        logger.info(f"Received request labelled {path}; "
+                    f"annotating best only: {annotate_best_only}; "
+                    f"annotating labels: {annotate_labels or '(all)'}; "
+                    f"hiding in history: {hide_in_history}")
+
+        image = Image.open(BytesIO(data))
+        image.save(request_filename(path, "jpeg"))
+        result, detections = detect(image)
+
+        if annotate_best_only:
+            best = get_best_detection(detections, annotate_labels or None)
+            annotate_indices = [best.index] if best else []
+            names = best.name if best else "no detections"
+        else:
+            if len(annotate_labels) == 0:
+                annotate_indices = None
+                names = [d.name for d in detections]
+            else:
+                annotate_indices = [
+                    d.index for d in detections if d.name in annotate_labels
+                ]
+                names = [
+                    d.name for d in detections if d.name in annotate_labels
+                ]
+        annotated_image = annotate_image(result, annotate_indices)
+        annotated_image.save(request_filename(f"{path}-annotated", "jpeg"))
+        if not hide_in_history:
+            detected_images[path] = annotated_image
+
+        detections_json = [detection.to_dict() for detection in detections]
+        response = json.dumps(detections_json)
+        self._send_response(200, "application/json", response.encode())
+        logger.info("Sent image recognition response "
+                    f"({names or 'no detections'}): {response}")
+
+
+logger.info("Performing warmup")
+detect(Image.new("RGB", (640, 480)))

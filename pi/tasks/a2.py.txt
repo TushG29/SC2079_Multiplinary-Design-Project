@@ -1,0 +1,29 @@
+import cv2
+import numpy
+from PIL import Image
+
+from image.detect import detect
+
+
+def draw_boxes_on_image(img, result):
+    img = numpy.array(img)
+    detection_count = result.boxes.shape[0]
+    for i in range(detection_count):
+        cls = int(result.boxes.cls[i].item())
+        name = result.names[cls]
+        confidence = float(result.boxes.conf[i].item())
+        text = f"{name} ({confidence})"
+        box = result.boxes.xyxy[i]
+        start_point = (int(box[0]), int(box[1]))
+        end_point = (int(box[2]), int(box[3]))
+        cv2.rectangle(img, start_point, end_point, (127, 127, 127), 2)
+        cv2.putText(img, text, (start_point[0], start_point[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (127, 127, 127), 2)
+    return img
+
+
+# This will not work anymore due to an API change.
+def a2():
+    img, result, _ = detect()
+    output = draw_boxes_on_image(img, result.numpy())
+    Image.fromarray(output).save("output.jpg")

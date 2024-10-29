@@ -1,0 +1,39 @@
+import sys
+from typing import List
+
+from loguru import logger
+
+from algorithms.navigation.entities import Obstacle, Direction, Position
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.instruction import Instruction
+from algorithms.navigation.obstacle_avoidance import navigate_around_obstacle
+from algorithms.navigation.robot import Robot
+
+logger.remove(0)
+logger.add(sys.stderr, level="INFO")
+
+
+def task_1_example() -> None:
+    obstacles: List[Obstacle] = [
+        Obstacle(Position(2, 16, Direction.EAST)),
+        Obstacle(Position(16, 17, Direction.SOUTH)),
+        Obstacle(Position(14, 9, Direction.EAST)),
+        Obstacle(Position(15, 3, Direction.WEST)),
+        Obstacle(Position(6, 9, Direction.NORTH)),
+    ]
+    grid = Grid(20, 20, obstacles)
+    robot = Robot(grid, Position(1, 1, Direction.NORTH))
+    instructions: List[Instruction] = robot.get_compressed_instructions()
+    for instruction in instructions:
+        print(instruction)
+
+
+def checklist_a5_example():
+    instructions: List[Instruction] = navigate_around_obstacle(5)
+    for instruction in instructions:
+        print(instruction)
+
+
+if __name__ == "__main__":
+    task_1_example()
+    checklist_a5_example()

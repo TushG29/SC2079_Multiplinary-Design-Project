@@ -1,0 +1,396 @@
+package com.mdp.group20.pagefragment;
+
+import static android.content.Context.MODE_APPEND;
+import static android.content.Context.MODE_PRIVATE;
+import static android.content.Context.SENSOR_SERVICE;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.Switch;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.constraintlayout.widget.ConstraintLayout;
+import androidx.fragment.app.Fragment;
+import androidx.lifecycle.ViewModelProviders;
+
+import com.mdp.group20.MainActivity;
+import com.mdp.group20.R;
+import com.mdp.group20.map.Map;
+
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+
+public class ControlTabFragment extends Fragment{
+    // Init
+
+
+    // Declaration Variable
+    // Shared Preferences
+    SharedPreferences sharedPreferences;
+    SharedPreferences.Editor editor;
+    static Button exploreStartBtn, fastestStartBtn, resetMapBtn, resetObsNo;
+    Button saveObsBtn, loadObsBtn;
+    static TextView exploreTimeTextView;
+    TextView fastestTimeTextView;
+    TextView robotStatusTextView;
+    ImageButton exploreResetButton, fastestResetButton;
+    static TextView robotStatusesTextView, robotStatusesBarTextView;
+    Switch phoneTiltSwitch;
+
+    String obsDataString;
+    private static final String ARG_SECTION_NUMBER = "section_number";
+    private static final String FILE_NAME = "obstacles.txt";
+    private static final String TAG = "ControlTabFragment";
+    private static long exploreTimer, fastestTimer;
+    private PageViewModel pageViewModel;
+    private Boolean isObsError = false;
+    private Sensor mSensor;
+    private SensorManager mSensorManager;
+    private Boolean isExploreBtnClicked = false;
+
+    // Timer
+    static Handler timerHandler = new Handler();
+
+    static Runnable timerRunnableExplore = new Runnable() {
+        @Override
+        public void run() {
+            long millisExplore = System.currentTimeMillis() - exploreTimer;
+            int secondsExplore = (int) (millisExplore / 1000);
+            int minutesExplore = secondsExplore / 60;
+            secondsExplore = secondsExplore % 60;
+
+            if(minutesExplore==6){
+                timerHandler.removeCallbacks(timerRunnableExplore);
+                exploreStartBtn.setText("Explore Start");
+                return;
+            }
+            exploreTimeTextView.setText(String.format("%02d:%02d", minutesExplore, secondsExplore));
+
+            timerHandler.postDelayed(this, 500);
+        }
+    };
+
+    Runnable timerRunnableFastest = new Runnable() {
+        @Override
+        public void run() {
+            long millisFastest = System.currentTimeMillis() - fastestTimer;
+            int secondsFastest = (int) (millisFastest / 1000);
+            int minutesFastest = secondsFastest / 60;
+            secondsFastest = secondsFastest % 60;
+
+            fastestTimeTextView.setText(String.format("%02d:%02d", minutesFastest, secondsFastest));
+
+            timerHandler.postDelayed(this, 500);
+        }
+    };
+
+    // Fragment Constructor
+    public static ControlTabFragment newInstance(int index) {
+        ControlTabFragment fragment = new ControlTabFragment();
+        Bundle bundle = new Bundle();
+        bundle.putInt(ARG_SECTION_NUMBER, index);
+        fragment.setArguments(bundle);
+        return fragment;
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        pageViewModel = ViewModelProviders.of(this).get(PageViewModel.class);
+        int index = 1;
+        if (getArguments() != null) {
+            index = getArguments().getInt(ARG_SECTION_NUMBER);
+        }
+        pageViewModel.setIndex(index);
+    }
+
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        // inflate
+        View root = inflater.inflate(R.layout.activity_control_tab, container, false);
+
+        // get shared preferences
+        sharedPreferences = getActivity().getSharedPreferences("Shared Preferences", Context.MODE_PRIVATE);
+
+
+        // variable initialization
+
+        exploreTimeTextView = root.findViewById(R.id.exploreTimeTextView);
+        fastestTimeTextView = root.findViewById(R.id.fastestTimeTextView);
+        exploreResetButton = root.findViewById(R.id.exploreResetImageBtn);
+        fastestResetButton = root.findViewById(R.id.fastestResetImageBtn);
+        exploreStartBtn = root.findViewById(R.id.exploreStartBtn);
+        fastestStartBtn = root.findViewById(R.id.fastestStartBtn);
+
+        resetMapBtn = root.findViewById(R.id.resetMapBtn);
+        resetObsNo = root.findViewById(R.id.resetObsNo);
+
+//        robotStatusesBarTextView = root.findViewById(R.id.robotStatusesBarTextView);
+//        robotStatusesTextView = root.findViewById(R.id.robotStatusesTextView);
+
+        robotStatusTextView = MainActivity.getRobotStatusTextView();
+        fastestTimer = 0;
+        exploreTimer = 0;
+
+        mSensorManager = (SensorManager) getActivity().getSystemService(SENSOR_SERVICE);
+        mSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+
+//        gridMap = MainActivity.getGridMap();
+
+        // Button Listener
+
+        resetObsNo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                MainActivity.resetObsText();
+            }
+        });
+        exploreStartBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Button exploreBtn = (Button) v;
+                if (exploreBtn.getText().equals("Explore Stop")) {
+                    MainActivity.sendStopSignal();
+                    timerHandler.removeCallbacks(timerRunnableExplore);
+                    exploreBtn.setText("Explore Start");
+                } else if (exploreBtn.getText().equals("Explore Start")) {
+                    printObstaclesData(true);
+                    if (!isObsError) {
+                        exploreTimeTextView.setText("00:00");
+                        exploreBtn.setText("Explore Stop");
+                        //TODO: update status
+                        exploreTimer = System.currentTimeMillis();
+                        timerHandler.postDelayed(timerRunnableExplore, 0);
+                        MainActivity.sendCarInfo();
+                    }
+
+                    isObsError = false;
+                }
+            }
+        });
+
+        fastestStartBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Button fastestPathBtn = (Button) v;
+                if (fastestPathBtn.getText().equals("Fastest Stop")) {
+                    MainActivity.sendStopSignal();
+                    timerHandler.removeCallbacks(timerRunnableFastest);
+                    fastestPathBtn.setText("Fastest Start");
+                } else if (fastestPathBtn.getText().equals("Fastest Start")) {
+                    fastestTimeTextView.setText("00:00");
+//                    showToast("Fastest path timer start!");
+                    MainActivity.sendModeInfo("mode fastestPath");
+                    fastestPathBtn.setText("Fastest Stop");
+                    //TODO: update status
+                    fastestTimer = System.currentTimeMillis();
+                    timerHandler.postDelayed(timerRunnableFastest, 0);
+                }
+            }
+        });
+        exploreResetButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showLog("Clicked exploreResetImageBtn");
+//                showToast("Reseting exploration time...");
+                exploreTimeTextView.setText("00:00");
+                robotStatusTextView.setText("Not Available");
+                if (exploreStartBtn.getText().equals("Explore Stop")) {
+                    timerHandler.removeCallbacks(timerRunnableExplore);
+                    exploreStartBtn.setText("Explore Start");
+                }
+
+                showLog("Exiting exploreResetImageBtn");
+            }
+        });
+        fastestResetButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showLog("Clicked fastestResetImageBtn");
+//                showToast("Reseting fastest time...");
+                fastestTimeTextView.setText("00:00");
+                robotStatusTextView.setText("Not Available");
+                if (fastestStartBtn.getText().equals("Fastest Stop")) {
+                    timerHandler.removeCallbacks(timerRunnableFastest);
+                    fastestStartBtn.setText("Fastest Start");
+                }
+
+                showLog("Exiting fastestResetImageBtn");
+            }
+        });
+
+        resetMapBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showLog("Clicked resetMapBtn");
+                showToast("Reseting map...");
+                MainActivity.getInstance().reset(false);
+            }
+        });
+
+//        saveObsBtn.setOnClickListener(new View.OnClickListener() {
+//            @Override
+//            public void onClick(View view) {
+//                if(!isObsError){
+//                    saveObs();
+//                }
+//            }
+//        });
+//
+//        loadObsBtn.setOnClickListener(new View.OnClickListener() {
+//            @Override
+//            public void onClick(View view) {
+//                loadObs();
+//            }
+//        });
+
+        return root;
+    }
+    public static void stopExplore(){
+        if (fastestStartBtn.getText().equals("Fastest Stop")) {
+            fastestStartBtn.performClick();
+        } else if (exploreStartBtn.getText().equals("Explore Stop")) {
+            MainActivity.sendStopSignal();
+            timerHandler.removeCallbacks(timerRunnableExplore);
+            exploreStartBtn.setText("Explore Start");
+        }
+    }
+//    private void saveObs(){
+//        printObstaclesData(false);
+//        FileOutputStream fos = null;
+//        try{
+//            fos = getActivity().openFileOutput(FILE_NAME, getActivity().MODE_PRIVATE);
+//            fos.write(obsDataString.getBytes());
+//            Toast.makeText(getContext(), "Saved to " + getActivity().getFilesDir() + "/" + FILE_NAME, Toast.LENGTH_SHORT).show();
+//        } catch (FileNotFoundException e){
+//            e.printStackTrace();
+//        } catch (IOException e) {
+//            throw new RuntimeException(e);
+//        } finally {
+//            if(fos != null){
+//                try {
+//                    fos.close();
+//                } catch (IOException e) {
+//                    throw new RuntimeException(e);
+//                }
+//            }
+//        }
+//    }
+//    private void loadObs(){
+//        FileInputStream fis = null;
+//        try {
+//            fis = getActivity().openFileInput(FILE_NAME);
+//            InputStreamReader isr = new InputStreamReader(fis);
+//            BufferedReader br = new BufferedReader(isr);
+//            StringBuilder sb = new StringBuilder();
+//            String text;
+//            ConstraintLayout selectedObsGrp;
+//            while ((text = br.readLine()) !=null){
+//                sb.append(text);
+//                String obs = sb.toString().replace("obstacles", "");
+//                MainActivity.printMessage(obs);
+//                String[] obsArr = obs.split(" ");
+//                for (int i = 0; i < obsArr.length; i++) {
+//                    if(obsArr[i].contains(",")){
+//                        // obstacle position
+//                    }else{
+//                        // obstacle id
+//                        selectedObsGrp = MainActivity
+//                    }
+//                    MainActivity.printMessage(obsArr[i]);
+//                }
+//            }
+//        } catch (FileNotFoundException e) {
+//            throw new RuntimeException(e);
+//        } catch (IOException e) {
+//            throw new RuntimeException(e);
+//        } finally {
+//            if(fis != null){
+//                try {
+//                    fis.close();
+//                } catch (IOException e) {
+//                    throw new RuntimeException(e);
+//                }
+//            }
+//        }
+//    }
+    private void printObstaclesData(Boolean isSendBTMessage) {
+        String[][] obsData = Map.getObstaclesData();
+        obsDataString = "obstacles ";
+        int count = 0;
+        for (int i = 0; i < obsData.length; i++) {
+            String testMessage = String.format("%s,%s,%s", obsData[i][0], obsData[i][1], obsData[i][2]);
+            showLog(testMessage);
+            if (!obsData[i][0].equals("-1") && !obsData[i][1].equals("-1")) {
+                //if row and col are not empty
+                if (obsData[i][2].equals("")) {
+                    // if direction is empty
+                    Toast.makeText(getContext(), "Ensure obstacles are correctly oriented", Toast.LENGTH_SHORT).show();
+                    isObsError = true;
+                    return;
+                } else {
+                    String obsInfo = String.format("%s %s,%s,%s ", (i + 1), obsData[i][0], obsData[i][1], obsData[i][2]);
+                    obsDataString += obsInfo;
+                    count++;
+                }
+            }
+        }
+
+        if (count == 0) {
+            Toast.makeText(getContext(), "No obstacles found", Toast.LENGTH_SHORT).show();
+            isObsError = true;
+        }
+
+        if (!isObsError && isSendBTMessage) {
+            MainActivity.sendModeInfo("mode discoverObstacles");
+            MainActivity.sendObstacleInfo(obsDataString);
+        }
+    }
+
+    public static void setRobotStatusesTextView(String actions) {
+        robotStatusesTextView.setText(actions);
+    }
+
+    private static void showLog(String message) {
+        Log.d(TAG, message);
+    }
+
+    private void showToast(String message) {
+        Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();
+    }
+
+    Handler sensorHandler = new Handler();
+    boolean sensorFlag = false;
+
+    private final Runnable sensorDelay = new Runnable() {
+        @Override
+        public void run() {
+            sensorFlag = true;
+            sensorHandler.postDelayed(this, 1000);
+        }
+    };
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+    }
+
+}

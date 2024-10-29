@@ -1,0 +1,3 @@
+from os import getenv
+
+OUTDOOR = getenv("OUTDOOR") and True or False

@@ -1,0 +1,50 @@
+package com.mdp.group20.modal;
+
+public class Robot {
+    private int row;
+    private int col;
+    private String direction;
+
+    public static final String NORTH = "N";
+    public static final String EAST = "E";
+    public static final String SOUTH = "S";
+    public static final String WEST = "W";
+
+    public Robot(int row, int col, String direction) {
+        this.row = row;
+        this.col = col;
+        this.direction = direction;
+    }
+
+    public int getRow() {
+        return row;
+    }
+    public void setRow(int row) {
+        this.row = row;
+    }
+    public int getCol() {
+        return col;
+    }
+    public void setCol(int col) {
+        this.col = col;
+    }
+    public String getDirection() {
+        return direction;
+    }
+
+    public void setDirection(String direction) {
+        this.direction = direction;
+    }
+
+
+
+    @Override
+    public String toString() {
+        return "Robot{" +
+                "row=" + row +
+                ", col=" + col +
+                ", direction=" + direction +
+                '}';
+    }
+}
+

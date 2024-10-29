@@ -1,0 +1,77 @@
+from collections import deque
+from typing import List, Set
+
+from algorithms.constants import OBSTACLE_SAFETY_DISTANCE
+from algorithms.navigation.entities import Obstacle, Coordinates
+
+
+class Grid:
+    def __init__(self, grid_height: int, grid_width: int, obstacles: List[Obstacle]):
+        self.height: int = grid_height
+        self.width: int = grid_width
+        self.obstacles: List[Obstacle] = obstacles
+
+    def _unsafe_coordinates_around_one_obstacle(self, obstacle: Obstacle) -> Set[Coordinates]:
+        """
+        Determines coordinates around a single obstacle which are unsafe for the robot to be in. An unsafe position
+        is one that overlaps with an obstacle, or falls within the safety distance of one.
+
+        Args:
+            obstacle: The obstacle that will cause coordinates around it to be unsafe.
+
+        Returns:
+            A list of unsafe positions around this obstacle.
+        """
+        obstacle_coord: Coordinates = (obstacle.position.x_coordinate, obstacle.position.y_coordinate)
+
+        queue: deque[Coordinates] = deque()
+        queue.append(obstacle_coord)
+
+        visited: Set[Coordinates] = set()
+        visited.add(obstacle_coord)
+
+        unsafe_positions: Set[Coordinates] = {obstacle_coord}
+
+        curr_distance = 1
+        while queue and curr_distance <= OBSTACLE_SAFETY_DISTANCE:
+            frozen_size = len(queue)
+            for i in range(frozen_size):
+                curr_x_coord, curr_y_coord = queue.popleft()
+
+                horizontal_vertical_offsets: List[Coordinates] = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+                for x_offset, y_offset in horizontal_vertical_offsets:
+                    next_x_coord, next_y_coord = curr_x_coord + x_offset, curr_y_coord + y_offset
+
+                    if (
+                        next_x_coord < 0
+                        or next_x_coord >= self.height
+                        or next_y_coord < 0
+                        or next_y_coord >= self.width
+                    ):
+                        continue
+                    if (next_x_coord, next_y_coord) in visited:
+                        continue
+
+                    unsafe_positions.add((next_x_coord, next_y_coord))
+                    queue.append((next_x_coord, next_y_coord))
+                    visited.add((next_x_coord, next_y_coord))
+
+            curr_distance += 1
+
+        return unsafe_positions
+
+    def unsafe_coordinates_around_all_obstacles(self) -> Set[Coordinates]:
+        """
+        Finds all the coordinates on the current grid which are unsafe for the robot to be in. An unsafe position
+        is one that overlaps with an obstacle, or falls within the safety distance of one.
+
+        Returns:
+            A list of unsafe positions around all obstacles on this grid.
+        """
+        all_unsafe_positions: Set[Coordinates] = set()
+        for obstacle in self.obstacles:
+            unsafe_positions_around_one_obstacle: Set[Coordinates] = self._unsafe_coordinates_around_one_obstacle(
+                obstacle
+            )
+            all_unsafe_positions = all_unsafe_positions.union(unsafe_positions_around_one_obstacle)
+        return all_unsafe_positions

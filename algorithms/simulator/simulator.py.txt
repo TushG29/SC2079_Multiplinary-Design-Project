@@ -1,0 +1,159 @@
+import time
+from typing import List
+
+import pygame
+
+from algorithms import constants
+from algorithms.navigation.entities import Obstacle, Position, Direction
+from algorithms.navigation.grid import Grid
+from algorithms.navigation.instruction import Instruction, MovementInstruction, RecogniseImageInstruction
+from algorithms.navigation.robot import Robot
+from algorithms.simulator.drawer import Drawer, GridDrawer, RobotDrawer
+from algorithms.simulator.environment import Environment
+from algorithms.simulator.interface import Interface
+
+# To create the pygame window and set to desired width & height
+WINDOW: pygame.Surface = pygame.display.set_mode((constants.WIN_WIDTH, constants.WIN_HEIGHT))
+
+
+def add_obstacles_manually(obs_list: list):
+    """
+    Convert a list of obstacle in (x,y,direction) format to a list of obstacle objects
+    """
+    obstacle_list_result = []
+    for o in obs_list:
+        obstacle = Obstacle(o)
+        obstacle_list_result.append(obstacle)
+    return obstacle_list_result
+
+
+class Simulator:
+    def __init__(self):
+        self.drawer: Drawer = Drawer(WINDOW)
+
+        # Activation of pygame library
+        pygame.init()
+        pygame.display.set_caption("Algorithm Simulator")
+
+        # The below is empty when randomization function for obstacles is in use
+        manual_obstacles = []
+        obstacles: List[Obstacle] = add_obstacles_manually(manual_obstacles)
+
+        # Initialise necessary objects
+        grid = Grid(20, 20, obstacles)
+        self.grid_drawer: GridDrawer = GridDrawer(WINDOW, grid)
+
+        self.environment = Environment(WINDOW, obstacles)
+        self.interface = Interface(WINDOW)
+
+        starting_robot_position = Position(1, 1, Direction.NORTH)
+        robot = Robot(grid, starting_robot_position)
+        self.robot = robot
+        self.robot_drawer = RobotDrawer(WINDOW, robot)
+
+        self.update_display()
+
+    def update_display(self):
+        """
+        This method allows the simulator window to appear as well as all the other objects.
+        """
+        self.environment.draw_environ()
+        self.grid_drawer.draw()
+        self.interface.draw_interface(self.robot_drawer.obs_visited)
+        self.robot_drawer.draw()
+        self.robot_drawer.draw_historic_path()
+
+        pygame.display.update()
+
+    def button_pressed_manager(self):
+        """
+        This method is called when a button is pressed so that it can be diverted to the correct functions
+        subsequently.
+        """
+        if self.interface.check_button_pressed() == constants.BTN_OBSTACLEFUNC:
+            self.generate_obstacles()
+
+        elif self.interface.check_button_pressed() == constants.BTN_RESETFUNC:
+            self.reset()
+
+        elif self.interface.check_button_pressed() == constants.BTN_STARTFUNC:
+            self.start_pathfinding_algo(WINDOW)
+            print("Path is completed!")
+
+        else:
+            return
+
+        self.update_display()
+
+    def reset(self):
+        """
+        This method resets everything by reinitialising grid and robot objects with its original default value.
+        It calls update_display() in order for it to be shown on the simulator
+        """
+        obstacles: List[Obstacle] = []
+        grid = Grid(20, 20, obstacles)
+        self.grid_drawer = GridDrawer(WINDOW, grid)
+        self.robot: Robot = Robot(grid, Position(1, 1, Direction.NORTH))
+        self.robot_drawer = RobotDrawer(WINDOW, self.robot)
+        self.update_display()
+
+    def generate_obstacles(self):
+        """
+        This method generates a set of obstacles from a random collection.
+        reset() will be called first to clear anything on the grid.
+        """
+        self.reset()
+        obstacles = add_obstacles_manually(Obstacle.randomize_obstacles())
+        self.robot.grid.obstacles = obstacles
+        self.environment = Environment(WINDOW, obstacles)
+        print(obstacles)
+
+    def start_pathfinding_algo(self, window):
+        print("Pathfinding begins!")
+        computed_path: List[Instruction] = self.robot.get_optimal_instructions()
+
+        i = 1
+        for instruct in computed_path:
+            # To execute each instruction in the Path given (a list of instructions)
+            if type(instruct) is MovementInstruction:
+                self.robot_drawer.handle_movement(instruct, self)
+            elif type(instruct) is RecogniseImageInstruction:
+                self.robot_drawer.obs_visited += 1
+                time.sleep(0.05)
+
+            print(i, "-> Executed!: ", instruct)
+            i += 1
+
+
+def main():
+    run_simulator = True
+
+    clock = pygame.time.Clock()
+
+    simulator = Simulator()
+
+    while run_simulator:
+        clock.tick(constants.FPS)
+
+        for event in pygame.event.get():
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                position = pygame.mouse.get_pos()
+                if position[0] < constants.GRID_WIDTH and position[1] < constants.GRID_HEIGHT:
+                    continue
+                else:
+                    simulator.button_pressed_manager()
+
+                #       simulator.update_display()
+                pass
+
+            elif event.type == pygame.QUIT:
+                run_simulator = False
+
+            elif event.type == pygame.KEYUP:
+                simulator.update_display()
+
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()

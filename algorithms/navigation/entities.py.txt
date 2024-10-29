@@ -1,0 +1,359 @@
+import random
+from enum import Enum, auto
+from typing import Tuple, Dict, Set
+
+from algorithms import constants
+from algorithms.constants import OPTIMAL_DISTANCE_FOR_CAPTURING_IMAGES
+
+
+class Movement(Enum):
+    FORWARD = auto()
+    FORWARD_LEFT = auto()
+    FORWARD_RIGHT = auto()
+    REVERSE = auto()
+    REVERSE_LEFT = auto()
+    REVERSE_RIGHT = auto()
+
+    def __repr__(self):
+        return self.name
+
+    def cost(self) -> int:
+        """
+        Retrieves the cost of executing the current movement.
+
+        Returns:
+            The cost of executing the current movement.
+        """
+        default_movement_cost: Dict[Movement, int] = {
+            Movement.FORWARD: 1,
+            Movement.FORWARD_LEFT: 2,
+            Movement.FORWARD_RIGHT: 2,
+            Movement.REVERSE: 1,
+            Movement.REVERSE_LEFT: 2,
+            Movement.REVERSE_RIGHT: 2,
+        }
+        return default_movement_cost[self]
+
+    def is_straight(self) -> bool:
+        """
+        Checks if the movement is straight.
+
+        Returns:
+            True if the movement is straight, False otherwise.
+        """
+        straight_movements: Set[Movement] = {Movement.FORWARD, Movement.REVERSE}
+        return self in straight_movements
+
+
+class Direction(Enum):
+    NORTH = (0, 1)
+    SOUTH = (0, -1)
+    EAST = (1, 0)
+    WEST = (-1, 0)
+
+    def __repr__(self):
+        return self.name
+
+    def get_opposite_direction(self) -> "Direction":
+        """
+        Finds a direction that is opposite to the current direction.
+
+        Returns:
+            The opposite direction.
+        """
+        default_opposite_direction: Dict[Direction, Direction] = {
+            Direction.NORTH: Direction.SOUTH,
+            Direction.SOUTH: Direction.NORTH,
+            Direction.EAST: Direction.WEST,
+            Direction.WEST: Direction.EAST,
+        }
+        opposite_direction: Direction = default_opposite_direction[self]
+        return opposite_direction
+
+    def get_robot_next_direction(self, movement: Movement) -> "Direction":
+        """
+        Finds the next direction that would be reached by the robot, if a movement was executed. The next direction
+        may or may not be the same as the current direction.
+
+        Args:
+            movement: The movement that the robot could execute.
+
+        Returns:
+            The final direction of the robot if it executes that movement.
+        """
+        default_next_direction: Dict[Direction, Dict[Movement, Direction]] = {
+            Direction.NORTH: {
+                Movement.FORWARD: Direction.NORTH,
+                Movement.FORWARD_LEFT: Direction.WEST,
+                Movement.FORWARD_RIGHT: Direction.EAST,
+                Movement.REVERSE: Direction.NORTH,
+                Movement.REVERSE_LEFT: Direction.EAST,
+                Movement.REVERSE_RIGHT: Direction.WEST,
+            },
+            Direction.SOUTH: {
+                Movement.FORWARD: Direction.SOUTH,
+                Movement.FORWARD_LEFT: Direction.EAST,
+                Movement.FORWARD_RIGHT: Direction.WEST,
+                Movement.REVERSE: Direction.SOUTH,
+                Movement.REVERSE_LEFT: Direction.WEST,
+                Movement.REVERSE_RIGHT: Direction.EAST,
+            },
+            Direction.EAST: {
+                Movement.FORWARD: Direction.EAST,
+                Movement.FORWARD_LEFT: Direction.NORTH,
+                Movement.FORWARD_RIGHT: Direction.SOUTH,
+                Movement.REVERSE: Direction.EAST,
+                Movement.REVERSE_LEFT: Direction.SOUTH,
+                Movement.REVERSE_RIGHT: Direction.NORTH,
+            },
+            Direction.WEST: {
+                Movement.FORWARD: Direction.WEST,
+                Movement.FORWARD_LEFT: Direction.SOUTH,
+                Movement.FORWARD_RIGHT: Direction.NORTH,
+                Movement.REVERSE: Direction.WEST,
+                Movement.REVERSE_LEFT: Direction.NORTH,
+                Movement.REVERSE_RIGHT: Direction.SOUTH,
+            },
+        }
+        next_direction: Direction = default_next_direction[self][movement]
+        return next_direction
+
+
+Coordinates = Tuple[int, int]
+
+
+class SimulatorPosition:
+    def __init__(self, x_coordinate: int, y_coordinate: int, direction: Direction):
+        self.x_coordinate: int = x_coordinate
+        self.y_coordinate: int = (constants.NUM_OF_GRIDS - 1) - y_coordinate
+        self.direction: Direction = direction
+
+
+class Position:
+    def __init__(self, x_coordinate: int, y_coordinate: int, direction: Direction):
+        self.x_coordinate: int = x_coordinate
+        self.y_coordinate: int = y_coordinate
+        self.direction: Direction = direction
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Position)
+            and self.x_coordinate == other.x_coordinate
+            and self.y_coordinate == other.y_coordinate
+            and self.direction == other.direction
+        )
+
+    def __hash__(self):
+        return hash((self.x_coordinate, self.y_coordinate, self.direction))
+
+    def __repr__(self):
+        return f"Position({self.x_coordinate.__repr__()}, {self.y_coordinate.__repr__()}, {self.direction.__repr__()})"
+
+    def get_next_robot_position(self, movement: Movement) -> "Position":
+        """
+        Determines the next position of the robot if it were to execute a movement from its current position.
+
+        Args:
+            movement: The movement that the robot could execute.
+
+        Returns:
+            The next position of the robot after it executes the movement. It is not guaranteed to be a legal
+            position on the grid.
+        """
+        absolute_offset_along_original_axis = 0
+        absolute_offset_along_final_axis = 0
+        coordinate_offsets: Dict[Direction, Dict[Movement, Tuple[int, int]]] = {
+            Direction.NORTH: {
+                Movement.FORWARD: (0, 1),
+                Movement.FORWARD_LEFT: (-absolute_offset_along_final_axis, absolute_offset_along_original_axis),
+                Movement.FORWARD_RIGHT: (absolute_offset_along_final_axis, absolute_offset_along_original_axis),
+                Movement.REVERSE: (0, -1),
+                Movement.REVERSE_LEFT: (-absolute_offset_along_final_axis, -absolute_offset_along_original_axis),
+                Movement.REVERSE_RIGHT: (absolute_offset_along_final_axis, -absolute_offset_along_original_axis),
+            },
+            Direction.SOUTH: {
+                Movement.FORWARD: (0, -1),
+                Movement.FORWARD_LEFT: (absolute_offset_along_final_axis, -absolute_offset_along_original_axis),
+                Movement.FORWARD_RIGHT: (-absolute_offset_along_final_axis, -absolute_offset_along_original_axis),
+                Movement.REVERSE: (0, 1),
+                Movement.REVERSE_LEFT: (absolute_offset_along_final_axis, absolute_offset_along_original_axis),
+                Movement.REVERSE_RIGHT: (-absolute_offset_along_final_axis, absolute_offset_along_original_axis),
+            },
+            Direction.EAST: {
+                Movement.FORWARD: (1, 0),
+                Movement.FORWARD_LEFT: (absolute_offset_along_original_axis, absolute_offset_along_final_axis),
+                Movement.FORWARD_RIGHT: (absolute_offset_along_original_axis, -absolute_offset_along_final_axis),
+                Movement.REVERSE: (-1, 0),
+                Movement.REVERSE_LEFT: (-absolute_offset_along_original_axis, absolute_offset_along_final_axis),
+                Movement.REVERSE_RIGHT: (-absolute_offset_along_original_axis, -absolute_offset_along_final_axis),
+            },
+            Direction.WEST: {
+                Movement.FORWARD: (-1, 0),
+                Movement.FORWARD_LEFT: (-absolute_offset_along_original_axis, -absolute_offset_along_final_axis),
+                Movement.FORWARD_RIGHT: (-absolute_offset_along_original_axis, absolute_offset_along_final_axis),
+                Movement.REVERSE: (1, 0),
+                Movement.REVERSE_LEFT: (absolute_offset_along_original_axis, -absolute_offset_along_final_axis),
+                Movement.REVERSE_RIGHT: (absolute_offset_along_original_axis, absolute_offset_along_final_axis),
+            },
+        }
+        x_offset, y_offset = coordinate_offsets[self.direction][movement]
+        next_x_coordinate: int = self.x_coordinate + x_offset
+        next_y_coordinate: int = self.y_coordinate + y_offset
+        next_direction: Direction = self.direction.get_robot_next_direction(movement)
+        return Position(next_x_coordinate, next_y_coordinate, next_direction)
+
+    def has_same_coordinate_as(self, other) -> bool:
+        """
+        Determines if the other position has the same coordinates as the current position.
+
+        Args:
+            other: The other position.
+
+        Returns:
+            True if the two positions have the same coordinates, and False otherwise.
+        """
+        return (
+            isinstance(other, Position)
+            and self.x_coordinate == other.x_coordinate
+            and self.y_coordinate == other.y_coordinate
+        )
+
+    def manhattan_dist_from(self, other) -> float:
+        """
+        Computes the Manhattan distance between the current position and another position.
+
+        Args:
+            other: The other position.
+
+        Returns:
+            The Manhattan distance between the two positions.
+        """
+        x_diff = abs(self.x_coordinate - other.x_coordinate)
+        y_diff = abs(self.y_coordinate - other.y_coordinate)
+        return x_diff + y_diff
+
+    def get_coord_pair_position(self):
+        return Pair(self.x_coordinate, self.y_coordinate)
+
+
+class Pair:
+    def __init__(self, x: int, y: int):
+        self.x = x
+        self.y = y
+
+
+class Obstacle:
+    def __init__(self, position: Position, visited: bool = False):
+        self.position: Position = position
+        self.visited: bool = visited
+
+    def __eq__(self, other):
+        return isinstance(other, Obstacle) and self.position == other.position and self.visited == other.visited
+
+    def __repr__(self):
+        return f"Obstacle({self.position.__repr__()}, {self.visited.__repr__()})"
+
+    def get_robot_target_position(self) -> Position:
+        """
+        Finds the ideal position that a robot should be in to capture an image on this obstacle.
+
+        Returns:
+            The ideal position of the robot.
+        """
+        distance_from_camera_to_centre_of_robot_inclusive = 2
+        coordinate_offset = OPTIMAL_DISTANCE_FOR_CAPTURING_IMAGES + distance_from_camera_to_centre_of_robot_inclusive
+
+        obstacle_x_coordinate: int = self.position.x_coordinate
+        obstacle_y_coordinate: int = self.position.y_coordinate
+        obstacle_direction: Direction = self.position.direction
+
+        target_x_coordinate: int = obstacle_x_coordinate
+        target_y_coordinate: int = obstacle_y_coordinate
+        target_direction = obstacle_direction.get_opposite_direction()
+
+        if obstacle_direction == Direction.NORTH:
+            target_y_coordinate = obstacle_y_coordinate + coordinate_offset
+        elif obstacle_direction == Direction.SOUTH:
+            target_y_coordinate = obstacle_y_coordinate - coordinate_offset
+        elif obstacle_direction == Direction.EAST:
+            target_x_coordinate = obstacle_x_coordinate + coordinate_offset
+        else:
+            target_x_coordinate = obstacle_x_coordinate - coordinate_offset
+
+        return Position(target_x_coordinate, target_y_coordinate, target_direction)
+
+    @staticmethod
+    def randomize_obstacles():
+        """
+        Returns a set of obstacles when called, position coordinates returned is not adapted to pygame format
+        """
+        set_of_obstacles = [
+            [
+                Position(2, 16, Direction.EAST),
+                Position(16, 17, Direction.SOUTH),
+                Position(14, 9, Direction.EAST),
+                Position(15, 3, Direction.WEST),
+                Position(6, 9, Direction.NORTH),
+            ],
+            [
+                Position(14, 5, Direction.SOUTH),
+                Position(3, 14, Direction.EAST),
+                Position(9, 18, Direction.SOUTH),
+                Position(14, 7, Direction.NORTH),
+                Position(17, 13, Direction.SOUTH),
+            ],
+            [
+                Position(10, 17, Direction.WEST),
+                Position(2, 17, Direction.SOUTH),
+                Position(14, 4, Direction.NORTH),
+                Position(7, 11, Direction.EAST),
+                Position(14, 15, Direction.SOUTH),
+            ],
+        ]
+
+        index = random.randint(0, 2)
+
+        return set_of_obstacles[index]
+
+
+class CoordinatesTransformer:
+    @staticmethod
+    def convert_robot_coordinates(robot_position: SimulatorPosition):
+        """
+        Converts robot coordinates in the form of (0-19,0-19) to the scaled pygame coordinates (x,y), no direction
+        returned. As robot occupies a space of 3 by 3 square (A rect) to display, it takes the top left coordinates
+        of the robot image and not the center of the robot. This function scales it to the pygame dimensions.
+        """
+        x = robot_position.x_coordinate
+        y = robot_position.y_coordinate
+
+        if robot_position.direction == Direction.NORTH:
+            converted_robot_position = Pair((x - 1) * constants.PYGAME_SCALE, (y - 1) * constants.PYGAME_SCALE)
+
+        elif robot_position.direction == Direction.SOUTH:
+            converted_robot_position = Pair((x + 1 - 2) * constants.PYGAME_SCALE, (y + 1 - 2) * constants.PYGAME_SCALE)
+
+        elif robot_position.direction == Direction.EAST:
+            converted_robot_position = Pair((x + 1 - 2) * constants.PYGAME_SCALE, (y - 1) * constants.PYGAME_SCALE)
+
+        elif robot_position.direction == Direction.WEST:
+            converted_robot_position = Pair((x - 1) * constants.PYGAME_SCALE, (y + 1 - 2) * constants.PYGAME_SCALE)
+
+        # print("Converted robot coordinates: ", converted_robot_position.x, converted_robot_position.y)
+        return converted_robot_position
+
+    @staticmethod
+    def convert_obstacle_coordinates(obstacle_position: SimulatorPosition):
+        """
+        Coordinates range from 0 to 19 only.
+        Converts coordinates of obstacle position to be scaled to pygame window
+        Because now the obstacle only occupies 1 grid, hence it requires the exact center coordinates.
+        """
+        # converted_format_position = transform_coordinates.convert_coordinates_format(obstacle_position)
+        x = obstacle_position.x_coordinate
+        y = obstacle_position.y_coordinate
+
+        converted_obstacle_position = Pair(x * constants.PYGAME_SCALE, y * constants.PYGAME_SCALE)
+
+        # print("Converted obstacle coordinates: ", converted_obstacle_position.x, converted_obstacle_position.y)
+        return converted_obstacle_position

@@ -1,0 +1,39 @@
+from datetime import datetime
+from io import BytesIO
+from threading import Thread
+from typing import List, Optional
+
+from loguru import logger
+from PIL import Image
+
+from image.detection import Detection
+from image.client.detect import detect as client_detect
+from pi.camera import CAPTURES_DIR, camera
+
+
+def capture_filename(extension: str) -> str:
+    timestamp = datetime.now().replace(microsecond=0).isoformat()
+    return CAPTURES_DIR / f"{timestamp}.{extension}"
+
+
+def capture() -> Image.Image:
+    logger.info("Capturing")
+    stream = BytesIO()
+    camera.capture(stream, format="jpeg", use_video_port=True)
+    stream.seek(0)
+    image = Image.open(stream)
+    return image
+
+
+def detect(label: str,
+           annotate_best_only: bool = False,
+           annotate_labels: Optional[List[str]] = None) -> List[Detection]:
+    image = capture()
+    save_thr = Thread(
+        target=lambda image: image.save(capture_filename("jpeg")),
+        args=[image.copy()])
+    save_thr.start()
+    detections = client_detect(image, label, annotate_best_only,
+                               annotate_labels)
+    save_thr.join()
+    return detections
